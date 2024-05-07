@@ -1,0 +1,9 @@
+[package]
+name = "graphics_playground"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+ash = "0.38"
+winit = "0.30"

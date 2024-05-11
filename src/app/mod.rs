@@ -25,7 +25,7 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        if let None = self.vulkan {
+        if self.vulkan.is_none() {
             self.vulkan = Some(Vulkan::new(self.window.as_ref().unwrap()).unwrap());
         }
     }

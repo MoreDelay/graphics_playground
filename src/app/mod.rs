@@ -1,5 +1,3 @@
-#![allow(dead_code, unused_variables)]
-
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -14,7 +12,6 @@ use crate::vulkan_backend::Vulkan;
 
 #[derive(Default)]
 pub struct App {
-    debug: bool,
     window: Option<Window>,
     vulkan: Option<Vulkan>,
 }
@@ -29,17 +26,14 @@ impl ApplicationHandler for App {
         );
 
         if let None = self.vulkan {
-            let Some(window) = &self.window else {
-                unreachable!("Window set right above");
-            };
-            self.vulkan = Some(Vulkan::new(self.debug).unwrap());
+            self.vulkan = Some(Vulkan::new(self.window.as_ref().unwrap()).unwrap());
         }
     }
 
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-        window_id: winit::window::WindowId,
+        _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
         info!("App::window_event");
@@ -58,13 +52,12 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    pub fn run(debug: bool) -> Result<()> {
+    pub fn run() -> Result<()> {
         info!("App::run");
 
         let event_loop = EventLoop::new()?;
         event_loop.set_control_flow(ControlFlow::Poll);
         let mut app = App {
-            debug,
             ..Default::default()
         };
 

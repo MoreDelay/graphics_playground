@@ -1,109 +1,127 @@
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
+use std::ffi::{c_void, CStr};
 
 use anyhow::{anyhow, Result};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 
-use vulkano::{
-    instance::{
-        debug::{
-            DebugUtilsMessageSeverity, DebugUtilsMessenger, DebugUtilsMessengerCallback,
-            DebugUtilsMessengerCreateInfo,
-        },
-        Instance, InstanceCreateInfo, InstanceExtensions,
-    },
-    VulkanLibrary,
-};
+use vulkanalia::loader::{LibloadingLoader, LIBRARY};
+use vulkanalia::prelude::v1_3::*;
+use vulkanalia::vk::ExtDebugUtilsExtension;
 
-const VALIDATION_LAYER: &str = "VK_LAYER_KHRONOS_validation";
+const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+const VALIDATION_LAYER: vk::ExtensionName =
+    vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
 pub struct Vulkan {
-    instance: Arc<Instance>,
-    debug_messenger: DebugUtilsMessenger,
+    _entry: Entry,
+    _instance: Instance,
+    _debug_callback: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 impl Vulkan {
-    pub fn new(debug: bool) -> Result<Vulkan> {
-        info!("Vulkan::new");
-        let library = VulkanLibrary::new()?;
-
-        library
-            .layer_properties()?
-            .for_each(|l| info!("Found layer: {}", l.name()));
-
-        let layer_set = library
-            .layer_properties()?
-            .into_iter()
-            .map(|l| String::from(l.name()))
-            .collect::<HashSet<_>>();
-
-        if debug && !layer_set.contains(VALIDATION_LAYER) {
-            return Err(anyhow!("Validation layer requested but not supported."));
-        }
-
-        let layers = if debug {
-            vec![String::from(VALIDATION_LAYER)]
-            // vec![]
-        } else {
-            vec![]
-        };
-
-        let extensions = InstanceExtensions {
-            ext_debug_utils: debug,
-            // Can not currently automatically figure out the required extensions because this
-            // requires a release after Vulkano 0.34 to be compatible with winit 0.30.
-            // ..Surface::required_extensions(&event_loop)
-            khr_surface: true,
-            khr_wayland_surface: true,
-            ..Default::default()
-        };
-
-        let mut debug_info;
+    pub fn new(window: &winit::window::Window) -> Result<Vulkan> {
+        debug!("Vulkan::new");
         unsafe {
-            let callback =
-                DebugUtilsMessengerCallback::new(|severity, message_type, callback_data| {
-                    let message = callback_data.message;
+            let loader = LibloadingLoader::new(LIBRARY)?;
+            let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
 
-                    match severity {
-                        DebugUtilsMessageSeverity::ERROR => {
-                            error!("({:?}) {}", message_type, message)
-                        }
-                        DebugUtilsMessageSeverity::WARNING => {
-                            warn!("({:?}) {}", message_type, message)
-                        }
-                        DebugUtilsMessageSeverity::INFO => {
-                            info!("({:?}) {}", message_type, message)
-                        }
-                        DebugUtilsMessageSeverity::VERBOSE => {
-                            trace!("({:?}) {}", message_type, message)
-                        }
-                        _ => error!("Unexpected severity"),
-                    }
-                });
+            let available_layers = entry
+                .enumerate_instance_layer_properties()?
+                .iter()
+                .map(|l| {
+                    debug!("Found layer: {}", l.layer_name);
+                    l.layer_name
+                })
+                .collect::<HashSet<_>>();
 
-            // Make a callback for all severity levels. By default this excludes verbose and info.
-            debug_info = DebugUtilsMessengerCreateInfo::user_callback(callback);
-            debug_info.message_severity = DebugUtilsMessageSeverity::VERBOSE
-                | DebugUtilsMessageSeverity::INFO
-                | DebugUtilsMessageSeverity::WARNING
-                | DebugUtilsMessageSeverity::ERROR;
+            if VALIDATION_ENABLED && !available_layers.contains(&VALIDATION_LAYER) {
+                return Err(anyhow!("Validation layer requested but not supported."));
+            }
+
+            let layers = if VALIDATION_ENABLED {
+                vec![VALIDATION_LAYER.as_ptr()]
+            } else {
+                Vec::new()
+            };
+
+            let application_info = vk::ApplicationInfo::builder()
+                .application_name(b"Graphics Playground\0")
+                .application_version(vk::make_version(0, 1, 0))
+                .engine_name(b"No Engine\0")
+                .engine_version(vk::make_version(1, 0, 0))
+                .api_version(vk::make_version(1, 3, 280));
+
+            let mut extensions = vulkanalia::window::get_required_instance_extensions(window)
+                .iter()
+                .map(|e| e.as_ptr())
+                .collect::<Vec<_>>();
+
+            if VALIDATION_ENABLED {
+                extensions.push(vk::EXT_DEBUG_UTILS_EXTENSION.name.as_ptr());
+            }
+
+            let flags = vk::InstanceCreateFlags::empty();
+
+            let mut info = vk::InstanceCreateInfo::builder()
+                .application_info(&application_info)
+                .enabled_layer_names(&layers)
+                .enabled_extension_names(&extensions)
+                .flags(flags);
+
+            // Make callback for all types of severities and all types of messages.
+            let mut debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+                .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
+                .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+                .user_callback(Some(debug_callback));
+
+            if VALIDATION_ENABLED {
+                info = info.push_next(&mut debug_info);
+            }
+
+            let instance = entry.create_instance(&info, None)?;
+
+            let debug_callback = if VALIDATION_ENABLED {
+                // Register callback with Vulkan instance for all other debug messages.
+                Some(instance.create_debug_utils_messenger_ext(&debug_info, None)?)
+            } else {
+                None
+            };
+
+            return Ok(Self {
+                _entry: entry,
+                _instance: instance,
+                _debug_callback: debug_callback,
+            });
         }
-
-        let info = InstanceCreateInfo {
-            enabled_extensions: extensions,
-            enabled_layers: layers,
-            // This does not work in Vulkano 0.34 but is already fixed in main branch.
-            // debug_utils_messengers: vec![debug_info.clone()],
-            ..InstanceCreateInfo::application_from_cargo_toml()
-        };
-
-        let instance = Instance::new(library, info)?;
-
-        // Keep the messenger alive until the end of the program or the callback will stop working.
-        let debug_messenger = DebugUtilsMessenger::new(instance.clone(), debug_info)?;
-
-        Ok(Self {
-            instance,
-            debug_messenger,
-        })
     }
+}
+
+// Callback for Vulkan validation layer, so we specify extern "system"
+// To see these messages printed out, set the environment variable RUST_LOG to the desired level.
+// returns: should the Vulkan call be arborted? Used to test validation layer itself.
+extern "system" fn debug_callback(
+    severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    _: *mut c_void,
+) -> vk::Bool32 {
+    let data = unsafe { *data };
+    let message = unsafe { CStr::from_ptr(data.message) }.to_string_lossy();
+
+    match severity {
+        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => {
+            error!("({:?}) {}", message_type, message)
+        }
+        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => {
+            warn!("({:?}) {}", message_type, message)
+        }
+        vk::DebugUtilsMessageSeverityFlagsEXT::INFO => {
+            debug!("({:?}) {}", message_type, message)
+        }
+        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => {
+            trace!("({:?}) {}", message_type, message)
+        }
+        _ => error!("Unexpected severity"),
+    }
+    vk::FALSE
 }

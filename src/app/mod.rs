@@ -61,7 +61,6 @@ impl App {
             ..Default::default()
         };
 
-        // Returns only on exit.
         event_loop.run_app(&mut app)?;
 
         Ok(())

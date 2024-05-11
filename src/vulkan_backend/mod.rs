@@ -4,75 +4,87 @@ use std::ffi::{c_void, CStr};
 use anyhow::{anyhow, Result};
 use log::{debug, error, trace, warn};
 
-use vulkanalia::loader::{LibloadingLoader, LIBRARY};
-use vulkanalia::prelude::v1_3::*;
-use vulkanalia::vk::ExtDebugUtilsExtension;
+use ash::{vk, Entry, Instance};
+use winit::raw_window_handle::HasDisplayHandle;
 
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
-const VALIDATION_LAYER: vk::ExtensionName =
-    vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
 pub struct Vulkan {
     _entry: Entry,
-    _instance: Instance,
-    _debug_callback: Option<vk::DebugUtilsMessengerEXT>,
+    instance: Instance,
+    debug_utils: ash::ext::debug_utils::Instance,
+    debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 impl Vulkan {
     pub fn new(window: &winit::window::Window) -> Result<Vulkan> {
         debug!("Vulkan::new");
         unsafe {
-            let loader = LibloadingLoader::new(LIBRARY)?;
-            let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
+            let entry = Entry::load()?;
 
-            let available_layers = entry
-                .enumerate_instance_layer_properties()?
+            let props = entry.enumerate_instance_layer_properties()?;
+            let available_layers = props
                 .iter()
                 .map(|l| {
-                    debug!("Found layer: {}", l.layer_name);
-                    l.layer_name
+                    debug!(
+                        "Found layer: {}",
+                        l.layer_name_as_c_str().unwrap().to_string_lossy()
+                    );
+                    l.layer_name_as_c_str().unwrap()
                 })
                 .collect::<HashSet<_>>();
 
-            if VALIDATION_ENABLED && !available_layers.contains(&VALIDATION_LAYER) {
+            let validation_layer = std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap();
+
+            if VALIDATION_ENABLED && !available_layers.contains(validation_layer.as_ref()) {
                 return Err(anyhow!("Validation layer requested but not supported."));
             }
 
             let layers = if VALIDATION_ENABLED {
-                vec![VALIDATION_LAYER.as_ptr()]
+                vec![validation_layer.as_ptr()]
             } else {
                 Vec::new()
             };
 
-            let application_info = vk::ApplicationInfo::builder()
-                .application_name(b"Graphics Playground\0")
-                .application_version(vk::make_version(0, 1, 0))
-                .engine_name(b"No Engine\0")
-                .engine_version(vk::make_version(1, 0, 0))
-                .api_version(vk::make_version(1, 3, 280));
+            let appname = std::ffi::CString::new("Graphics Playground").unwrap();
+            let engname = std::ffi::CString::new("No Engine").unwrap();
+            let application_info = vk::ApplicationInfo::default()
+                .application_name(appname.as_ref())
+                .application_version(vk::make_api_version(0, 0, 1, 0))
+                .engine_name(engname.as_ref())
+                .engine_version(vk::make_api_version(0, 0, 1, 0))
+                .api_version(vk::make_api_version(0, 1, 3, 281));
 
-            let mut extensions = vulkanalia::window::get_required_instance_extensions(window)
-                .iter()
-                .map(|e| e.as_ptr())
-                .collect::<Vec<_>>();
+            let mut extensions = Vec::from(ash_window::enumerate_required_extensions(
+                window.display_handle()?.as_raw(),
+            )?);
 
             if VALIDATION_ENABLED {
-                extensions.push(vk::EXT_DEBUG_UTILS_EXTENSION.name.as_ptr());
+                extensions.push(ash::ext::debug_utils::NAME.as_ptr());
             }
 
             let flags = vk::InstanceCreateFlags::empty();
 
-            let mut info = vk::InstanceCreateInfo::builder()
+            let mut info = vk::InstanceCreateInfo::default()
                 .application_info(&application_info)
                 .enabled_layer_names(&layers)
                 .enabled_extension_names(&extensions)
                 .flags(flags);
 
             // Make callback for all types of severities and all types of messages.
-            let mut debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-                .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
-                .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
-                .user_callback(Some(debug_callback));
+            let mut debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                .message_severity(
+                    vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                )
+                .message_type(
+                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
+                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
+                )
+                .pfn_user_callback(Some(debug_callback));
 
             if VALIDATION_ENABLED {
                 info = info.push_next(&mut debug_info);
@@ -80,18 +92,34 @@ impl Vulkan {
 
             let instance = entry.create_instance(&info, None)?;
 
-            let debug_callback = if VALIDATION_ENABLED {
-                // Register callback with Vulkan instance for all other debug messages.
-                Some(instance.create_debug_utils_messenger_ext(&debug_info, None)?)
+            let debug_utils = ash::ext::debug_utils::Instance::new(&entry, &instance);
+
+            let debug_messenger = if VALIDATION_ENABLED {
+                Some(debug_utils.create_debug_utils_messenger(&debug_info, None)?)
             } else {
                 None
             };
 
             return Ok(Self {
                 _entry: entry,
-                _instance: instance,
-                _debug_callback: debug_callback,
+                instance,
+                debug_utils,
+                debug_messenger,
             });
+        }
+    }
+}
+
+impl Drop for Vulkan {
+    fn drop(&mut self) {
+        debug!("Drop Vulkan");
+        unsafe {
+            if let Some(cb) = self.debug_messenger {
+                self.debug_utils.destroy_debug_utils_messenger(cb, None);
+            }
+
+            self.instance.destroy_instance(None);
+            debug!("Done");
         }
     }
 }
@@ -106,7 +134,7 @@ extern "system" fn debug_callback(
     _: *mut c_void,
 ) -> vk::Bool32 {
     let data = unsafe { *data };
-    let message = unsafe { CStr::from_ptr(data.message) }.to_string_lossy();
+    let message = unsafe { CStr::from_ptr(data.p_message) }.to_string_lossy();
 
     match severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => {

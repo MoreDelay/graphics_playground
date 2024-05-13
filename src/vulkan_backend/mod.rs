@@ -2,11 +2,13 @@ use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
 
 use anyhow::{anyhow, Result};
+use ash::vk::{PresentModeKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR};
 use log::{debug, error, trace, warn};
 
 use ash::ext::debug_utils::Instance as DebugLoader;
+use ash::khr::surface::Instance as SurfaceLoader;
 use ash::{vk, Entry, Instance};
-use winit::raw_window_handle::HasDisplayHandle;
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 
@@ -15,6 +17,7 @@ pub struct Vulkan {
     instance: Instance,
     debug_loader: DebugLoader,
     debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
+    surface: vk::SurfaceKHR,
 }
 
 impl Vulkan {
@@ -100,12 +103,137 @@ impl Vulkan {
             None
         };
 
+        let surface = unsafe {
+            ash_window::create_surface(
+                &entry,
+                &instance,
+                window.display_handle()?.as_raw(),
+                window.window_handle()?.as_raw(),
+                None,
+            )
+        }?;
+
+        let surface_loader = SurfaceLoader::new(&entry, &instance);
+        let (physical_device, surface_capabilities, surface_formats, surface_present_modes) =
+            Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
+
+        let properties_device = unsafe { instance.get_physical_device_properties(physical_device) };
+        let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
+            & properties_device.limits.framebuffer_depth_sample_counts;
+        let msaa_samples_max = [
+            vk::SampleCountFlags::TYPE_64,
+            vk::SampleCountFlags::TYPE_32,
+            vk::SampleCountFlags::TYPE_16,
+            vk::SampleCountFlags::TYPE_8,
+            vk::SampleCountFlags::TYPE_4,
+            vk::SampleCountFlags::TYPE_2,
+        ]
+        .iter()
+        .find(|c| msaa_counts.contains(**c))
+        .cloned()
+        .unwrap_or(vk::SampleCountFlags::TYPE_1);
+
         return Ok(Self {
             entry,
             instance,
             debug_loader,
             debug_messenger,
+            surface,
         });
+    }
+
+    fn select_physical_device(
+        instance: &Instance,
+        surface_loader: &SurfaceLoader,
+        surface: &SurfaceKHR,
+    ) -> Result<(
+        vk::PhysicalDevice,
+        SurfaceCapabilitiesKHR,
+        Vec<SurfaceFormatKHR>,
+        Vec<PresentModeKHR>,
+    )> {
+        for physical_device in unsafe { instance.enumerate_physical_devices() }? {
+            let properties_device =
+                unsafe { instance.get_physical_device_properties(physical_device) };
+            if properties_device.device_type != vk::PhysicalDeviceType::DISCRETE_GPU {
+                continue;
+            }
+
+            // Keep this here if I need to check for other features in the future.
+            // let features = unsafe { instance.get_physical_device_features(physical_device) };
+            // if features.geometry_shader != vk::TRUE {
+            //     continue;
+            // }
+            // if features.sampler_anisotropy != vk::TRUE {
+            //     continue;
+            // }
+
+            let properties_queues =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+            // Graphics queues also support transfer operations as per spec.
+            let queue_graphics = properties_queues
+                .iter()
+                .position(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+                .map(|i| i as u32);
+            if let None = queue_graphics {
+                continue;
+            }
+
+            let queue_present = properties_queues
+                .iter()
+                .enumerate()
+                .position(|(idx, prop)| unsafe {
+                    surface_loader
+                        .get_physical_device_surface_support(physical_device, idx as u32, surface)
+                        .is_ok()
+                })
+                .map(|i| i as u32);
+            if let None = queue_present {
+                continue;
+            }
+
+            let extensions =
+                unsafe { instance.enumerate_device_extension_properties(physical_device) }?
+                    .iter()
+                    .map(|e| e.extension_name)
+                    .collect::<HashSet<_>>();
+
+            let extensions_needed = &[ash::khr::swapchain::NAME];
+            let all_extensions_available = extensions_needed
+                .iter()
+                .all(|e| extensions_needed.contains(e));
+            if !all_extensions_available {
+                continue;
+            }
+
+            let Ok(swapchain_capabilities) = (unsafe {
+                surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
+            }) else {
+                continue;
+            };
+            let Ok(swapchain_formats) = (unsafe {
+                surface_loader.get_physical_device_surface_formats(physical_device, surface)
+            }) else {
+                continue;
+            };
+            let Ok(swapchain_present_modes) = (unsafe {
+                surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
+            }) else {
+                continue;
+            };
+
+            if swapchain_formats.is_empty() || swapchain_present_modes.is_empty() {
+                continue;
+            }
+
+            return Ok((
+                physical_device,
+                swapchain_capabilities,
+                swapchain_formats,
+                swapchain_present_modes,
+            ));
+        }
+        return Err(anyhow!("No suitable physical device found"));
     }
 }
 

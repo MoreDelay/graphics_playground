@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
 
 use anyhow::{anyhow, Result};
-use ash::vk::{PresentModeKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR};
+use ash::vk::{
+    DebugUtilsMessengerEXT, PresentModeKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR,
+};
 use log::{debug, error, trace, warn};
 
 use ash::ext::debug_utils::Instance as DebugLoader;
@@ -23,6 +25,50 @@ pub struct Vulkan {
 impl Vulkan {
     pub fn new(window: &winit::window::Window) -> Result<Vulkan> {
         debug!("Vulkan::new");
+        let (entry, instance, debug_loader, debug_messenger) = Vulkan::create_instance(window)?;
+
+        let surface = unsafe {
+            ash_window::create_surface(
+                &entry,
+                &instance,
+                window.display_handle()?.as_raw(),
+                window.window_handle()?.as_raw(),
+                None,
+            )
+        }?;
+
+        let surface_loader = SurfaceLoader::new(&entry, &instance);
+        let (physical_device, surface_capabilities, surface_formats, surface_present_modes) =
+            Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
+
+        let properties_device = unsafe { instance.get_physical_device_properties(physical_device) };
+        let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
+            & properties_device.limits.framebuffer_depth_sample_counts;
+        let msaa_samples_max = [
+            vk::SampleCountFlags::TYPE_64,
+            vk::SampleCountFlags::TYPE_32,
+            vk::SampleCountFlags::TYPE_16,
+            vk::SampleCountFlags::TYPE_8,
+            vk::SampleCountFlags::TYPE_4,
+            vk::SampleCountFlags::TYPE_2,
+        ]
+        .iter()
+        .find(|c| msaa_counts.contains(**c))
+        .cloned()
+        .unwrap_or(vk::SampleCountFlags::TYPE_1);
+
+        return Ok(Self {
+            entry,
+            instance,
+            debug_loader,
+            debug_messenger,
+            surface,
+        });
+    }
+
+    fn create_instance(
+        window: &winit::window::Window,
+    ) -> Result<(Entry, Instance, DebugLoader, Option<DebugUtilsMessengerEXT>)> {
         let entry = unsafe { Entry::load() }?;
 
         let props = unsafe { entry.enumerate_instance_layer_properties() }?;
@@ -103,43 +149,7 @@ impl Vulkan {
             None
         };
 
-        let surface = unsafe {
-            ash_window::create_surface(
-                &entry,
-                &instance,
-                window.display_handle()?.as_raw(),
-                window.window_handle()?.as_raw(),
-                None,
-            )
-        }?;
-
-        let surface_loader = SurfaceLoader::new(&entry, &instance);
-        let (physical_device, surface_capabilities, surface_formats, surface_present_modes) =
-            Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
-
-        let properties_device = unsafe { instance.get_physical_device_properties(physical_device) };
-        let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
-            & properties_device.limits.framebuffer_depth_sample_counts;
-        let msaa_samples_max = [
-            vk::SampleCountFlags::TYPE_64,
-            vk::SampleCountFlags::TYPE_32,
-            vk::SampleCountFlags::TYPE_16,
-            vk::SampleCountFlags::TYPE_8,
-            vk::SampleCountFlags::TYPE_4,
-            vk::SampleCountFlags::TYPE_2,
-        ]
-        .iter()
-        .find(|c| msaa_counts.contains(**c))
-        .cloned()
-        .unwrap_or(vk::SampleCountFlags::TYPE_1);
-
-        return Ok(Self {
-            entry,
-            instance,
-            debug_loader,
-            debug_messenger,
-            surface,
-        });
+        Ok((entry, instance, debug_loader, debug_messenger))
     }
 
     fn select_physical_device(
@@ -179,12 +189,14 @@ impl Vulkan {
                 continue;
             }
 
-            let queue_present = properties_queues
-                .iter()
-                .enumerate()
-                .position(|(idx, prop)| unsafe {
+            let queue_present = (0..properties_queues.len())
+                .position(|queue_index| unsafe {
                     surface_loader
-                        .get_physical_device_surface_support(physical_device, idx as u32, surface)
+                        .get_physical_device_surface_support(
+                            physical_device,
+                            queue_index as u32,
+                            *surface,
+                        )
                         .is_ok()
                 })
                 .map(|i| i as u32);
@@ -192,32 +204,43 @@ impl Vulkan {
                 continue;
             }
 
-            let extensions =
+            let extensions_available =
                 unsafe { instance.enumerate_device_extension_properties(physical_device) }?
                     .iter()
-                    .map(|e| e.extension_name)
+                    .map(|e| {
+                        e.extension_name
+                            .iter()
+                            .map(|v| *v as u8)
+                            .collect::<Vec<_>>()
+                    })
                     .collect::<HashSet<_>>();
 
             let extensions_needed = &[ash::khr::swapchain::NAME];
-            let all_extensions_available = extensions_needed
+            // Make type system happy.
+            let extensions_available = extensions_available
                 .iter()
-                .all(|e| extensions_needed.contains(e));
-            if !all_extensions_available {
+                .map(|e| CStr::from_bytes_until_nul(e).unwrap())
+                .collect::<Vec<_>>();
+
+            if !extensions_needed
+                .iter()
+                .all(|e| extensions_available.contains(e))
+            {
                 continue;
             }
 
             let Ok(swapchain_capabilities) = (unsafe {
-                surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
+                surface_loader.get_physical_device_surface_capabilities(physical_device, *surface)
             }) else {
                 continue;
             };
             let Ok(swapchain_formats) = (unsafe {
-                surface_loader.get_physical_device_surface_formats(physical_device, surface)
+                surface_loader.get_physical_device_surface_formats(physical_device, *surface)
             }) else {
                 continue;
             };
             let Ok(swapchain_present_modes) = (unsafe {
-                surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
+                surface_loader.get_physical_device_surface_present_modes(physical_device, *surface)
             }) else {
                 continue;
             };

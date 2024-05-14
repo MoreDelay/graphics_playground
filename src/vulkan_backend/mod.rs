@@ -1,9 +1,12 @@
+#![allow(dead_code, unused_variables)]
+
 use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
-    DebugUtilsMessengerEXT, PresentModeKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR,
+    DebugUtilsMessengerEXT, PhysicalDevice, PresentModeKHR, SurfaceCapabilitiesKHR,
+    SurfaceFormatKHR, SurfaceKHR,
 };
 use log::{debug, error, trace, warn};
 
@@ -41,21 +44,7 @@ impl Vulkan {
         let (physical_device, surface_capabilities, surface_formats, surface_present_modes) =
             Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
 
-        let properties_device = unsafe { instance.get_physical_device_properties(physical_device) };
-        let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
-            & properties_device.limits.framebuffer_depth_sample_counts;
-        let msaa_samples_max = [
-            vk::SampleCountFlags::TYPE_64,
-            vk::SampleCountFlags::TYPE_32,
-            vk::SampleCountFlags::TYPE_16,
-            vk::SampleCountFlags::TYPE_8,
-            vk::SampleCountFlags::TYPE_4,
-            vk::SampleCountFlags::TYPE_2,
-        ]
-        .iter()
-        .find(|c| msaa_counts.contains(**c))
-        .cloned()
-        .unwrap_or(vk::SampleCountFlags::TYPE_1);
+        let msaa_samples = Vulkan::get_supported_msaa_sample_count(&instance, &physical_device);
 
         return Ok(Self {
             entry,
@@ -257,6 +246,28 @@ impl Vulkan {
             ));
         }
         return Err(anyhow!("No suitable physical device found"));
+    }
+
+    fn get_supported_msaa_sample_count(
+        instance: &Instance,
+        physical_device: &PhysicalDevice,
+    ) -> vk::SampleCountFlags {
+        let properties_device =
+            unsafe { instance.get_physical_device_properties(*physical_device) };
+        let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
+            & properties_device.limits.framebuffer_depth_sample_counts;
+        [
+            vk::SampleCountFlags::TYPE_64,
+            vk::SampleCountFlags::TYPE_32,
+            vk::SampleCountFlags::TYPE_16,
+            vk::SampleCountFlags::TYPE_8,
+            vk::SampleCountFlags::TYPE_4,
+            vk::SampleCountFlags::TYPE_2,
+        ]
+        .iter()
+        .find(|c| msaa_counts.contains(**c))
+        .cloned()
+        .unwrap_or(vk::SampleCountFlags::TYPE_1)
     }
 }
 

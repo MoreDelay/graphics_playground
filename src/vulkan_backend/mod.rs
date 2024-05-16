@@ -5,19 +5,28 @@ use std::ffi::{c_void, CStr};
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
-    DebugUtilsMessengerEXT, PhysicalDevice, PresentModeKHR, SurfaceCapabilitiesKHR,
-    SurfaceFormatKHR, SurfaceKHR,
+    DebugUtilsMessengerEXT, Extent2D, Image, PhysicalDevice, PresentModeKHR,
+    SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
 };
 use log::{debug, error, trace, warn};
 
 use ash::ext::debug_utils::Instance as DebugLoader;
 use ash::khr::surface::Instance as SurfaceLoader;
+use ash::khr::swapchain::Device as SwapchainLoader;
 use ash::{vk, Device, Entry, Instance};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 
 struct SwapchainContext {
+    swapchain_loader: SwapchainLoader,
+    swapchain: SwapchainKHR,
+    swapchain_images: Vec<Image>,
+    swapchain_format_used: SurfaceFormatKHR,
+    swapchain_extent: Extent2D,
+}
+
+struct SwapchainSupport {
     capabilities: SurfaceCapabilitiesKHR,
     formats: Vec<SurfaceFormatKHR>,
     present_modes: Vec<PresentModeKHR>,
@@ -44,8 +53,9 @@ pub struct Vulkan {
     physical_device: PhysicalDevice,
 
     queue_indices: QueueIndices,
-    swapchain_context: SwapchainContext,
+    swapchain_support: SwapchainSupport,
     device_context: DeviceContext,
+    swapchain_context: SwapchainContext,
 }
 
 impl Vulkan {
@@ -64,13 +74,22 @@ impl Vulkan {
             )
         }?;
 
-        let (physical_device, queue_indices, swapchain_context) =
+        let (physical_device, queue_indices, swapchain_support) =
             Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
 
         let msaa_samples = Vulkan::get_supported_msaa_sample_count(&instance, &physical_device);
 
         let device_context =
             Vulkan::create_logical_device(&instance, &physical_device, &queue_indices)?;
+
+        let swapchain_context = Vulkan::create_swapchain(
+            &instance,
+            &device_context.device,
+            &window,
+            &surface,
+            &swapchain_support,
+            &queue_indices,
+        )?;
 
         return Ok(Self {
             entry,
@@ -81,8 +100,9 @@ impl Vulkan {
             surface,
             physical_device,
             queue_indices,
-            swapchain_context,
+            swapchain_support,
             device_context,
+            swapchain_context,
         });
     }
 
@@ -176,7 +196,7 @@ impl Vulkan {
         instance: &Instance,
         surface_loader: &SurfaceLoader,
         surface: &SurfaceKHR,
-    ) -> Result<(vk::PhysicalDevice, QueueIndices, SwapchainContext)> {
+    ) -> Result<(vk::PhysicalDevice, QueueIndices, SwapchainSupport)> {
         for physical_device in unsafe { instance.enumerate_physical_devices() }? {
             let properties_device =
                 unsafe { instance.get_physical_device_properties(physical_device) };
@@ -269,12 +289,12 @@ impl Vulkan {
                 present: queue_present,
             };
 
-            let swapchain_context = SwapchainContext {
+            let swapchain_support = SwapchainSupport {
                 capabilities: swapchain_capabilities,
                 formats: swapchain_formats,
                 present_modes: swapchain_present_modes,
             };
-            return Ok((physical_device, queue_indices, swapchain_context));
+            return Ok((physical_device, queue_indices, swapchain_support));
         }
         return Err(anyhow!("No suitable physical device found"));
     }
@@ -298,7 +318,7 @@ impl Vulkan {
             })
             .collect::<Vec<_>>();
 
-        let extensions = vec![];
+        let extensions = vec![ash::khr::swapchain::NAME.as_ptr()];
 
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(false)
@@ -321,6 +341,94 @@ impl Vulkan {
         };
 
         Ok(device_context)
+    }
+
+    fn create_swapchain(
+        instance: &Instance,
+        device: &Device,
+        window: &winit::window::Window,
+        surface: &SurfaceKHR,
+        swapchain_support: &SwapchainSupport,
+        queue_indices: &QueueIndices,
+    ) -> Result<SwapchainContext> {
+        let swapchain_format_used = swapchain_support
+            .formats
+            .iter()
+            .find(|f| {
+                f.format == vk::Format::R8G8B8A8_SRGB
+                    && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+            })
+            .cloned()
+            // If not found choose any format.
+            .unwrap_or_else(|| swapchain_support.formats[0]);
+
+        let swapchain_present_mode_used = swapchain_support
+            .present_modes
+            .iter()
+            .find(|m| **m == vk::PresentModeKHR::MAILBOX) // triple buffering
+            .cloned()
+            .unwrap_or(vk::PresentModeKHR::FIFO); // guaranteed to be available
+
+        let swapchain_extent = if swapchain_support.capabilities.current_extent.width != u32::MAX {
+            swapchain_support.capabilities.current_extent
+        } else {
+            vk::Extent2D::default()
+                .width(window.inner_size().width.clamp(
+                    swapchain_support.capabilities.min_image_extent.width,
+                    swapchain_support.capabilities.max_image_extent.width,
+                ))
+                .height(window.inner_size().height.clamp(
+                    swapchain_support.capabilities.min_image_extent.height,
+                    swapchain_support.capabilities.max_image_extent.height,
+                ))
+        };
+
+        let mut image_count = swapchain_support.capabilities.min_image_count + 1;
+        if swapchain_support.capabilities.max_image_count != 0
+            && image_count > swapchain_support.capabilities.max_image_count
+        {
+            image_count = swapchain_support.capabilities.max_image_count;
+        }
+
+        // If queues are separate, use concurrent so we do not have to deal with ownership.
+        let mut queue_family_indices = vec![];
+        let image_sharing_mode = if queue_indices.graphics != queue_indices.present {
+            queue_family_indices.push(queue_indices.graphics);
+            queue_family_indices.push(queue_indices.present);
+            vk::SharingMode::CONCURRENT
+        } else {
+            vk::SharingMode::EXCLUSIVE
+        };
+
+        let info = vk::SwapchainCreateInfoKHR::default()
+            .surface(*surface)
+            .min_image_count(image_count)
+            .image_format(swapchain_format_used.format)
+            .image_color_space(swapchain_format_used.color_space)
+            .image_extent(swapchain_extent)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_sharing_mode(image_sharing_mode)
+            .queue_family_indices(&queue_family_indices)
+            .pre_transform(swapchain_support.capabilities.current_transform)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(swapchain_present_mode_used)
+            .clipped(true)
+            .old_swapchain(vk::SwapchainKHR::null());
+
+        let swapchain_loader = SwapchainLoader::new(instance, device);
+        let swapchain = unsafe { swapchain_loader.create_swapchain(&info, None) }?;
+        let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }?;
+
+        let swapchain_context = SwapchainContext {
+            swapchain_loader,
+            swapchain,
+            swapchain_images,
+            swapchain_format_used,
+            swapchain_extent,
+        };
+
+        Ok(swapchain_context)
     }
 
     fn get_supported_msaa_sample_count(
@@ -349,6 +457,12 @@ impl Vulkan {
 impl Drop for Vulkan {
     fn drop(&mut self) {
         debug!("Drop Vulkan");
+        unsafe {
+            self.swapchain_context
+                .swapchain_loader
+                .destroy_swapchain(self.swapchain_context.swapchain, None)
+        };
+
         unsafe { self.device_context.device.destroy_device(None) };
 
         unsafe { self.surface_loader.destroy_surface(self.surface, None) };

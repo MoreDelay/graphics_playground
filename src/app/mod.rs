@@ -12,8 +12,10 @@ use crate::vulkan_backend::Vulkan;
 
 #[derive(Default)]
 pub struct App {
-    window: Option<Window>,
     vulkan: Option<Vulkan>,
+    // Window needs to stay after vulkan so that it outlifes destruction of vulkan surface. See
+    // Rust drop order.
+    window: Option<Window>,
 }
 
 impl ApplicationHandler for App {

@@ -12,17 +12,40 @@ use log::{debug, error, trace, warn};
 
 use ash::ext::debug_utils::Instance as DebugLoader;
 use ash::khr::surface::Instance as SurfaceLoader;
-use ash::{vk, Entry, Instance};
+use ash::{vk, Device, Entry, Instance};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+
+struct SwapchainContext {
+    capabilities: SurfaceCapabilitiesKHR,
+    formats: Vec<SurfaceFormatKHR>,
+    present_modes: Vec<PresentModeKHR>,
+}
+
+struct QueueIndices {
+    graphics: u32,
+    present: u32,
+}
+
+struct DeviceContext {
+    device: Device,
+    queue_graphics: vk::Queue,
+    queue_present: vk::Queue,
+}
 
 pub struct Vulkan {
     entry: Entry,
     instance: Instance,
     debug_loader: DebugLoader,
+    surface_loader: SurfaceLoader,
     debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
     surface: vk::SurfaceKHR,
+    physical_device: PhysicalDevice,
+
+    queue_indices: QueueIndices,
+    swapchain_context: SwapchainContext,
+    device_context: DeviceContext,
 }
 
 impl Vulkan {
@@ -30,6 +53,7 @@ impl Vulkan {
         debug!("Vulkan::new");
         let (entry, instance, debug_loader, debug_messenger) = Vulkan::create_instance(window)?;
 
+        let surface_loader = SurfaceLoader::new(&entry, &instance);
         let surface = unsafe {
             ash_window::create_surface(
                 &entry,
@@ -40,18 +64,25 @@ impl Vulkan {
             )
         }?;
 
-        let surface_loader = SurfaceLoader::new(&entry, &instance);
-        let (physical_device, surface_capabilities, surface_formats, surface_present_modes) =
+        let (physical_device, queue_indices, swapchain_context) =
             Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
 
         let msaa_samples = Vulkan::get_supported_msaa_sample_count(&instance, &physical_device);
+
+        let device_context =
+            Vulkan::create_logical_device(&instance, &physical_device, &queue_indices)?;
 
         return Ok(Self {
             entry,
             instance,
             debug_loader,
+            surface_loader,
             debug_messenger,
             surface,
+            physical_device,
+            queue_indices,
+            swapchain_context,
+            device_context,
         });
     }
 
@@ -145,12 +176,7 @@ impl Vulkan {
         instance: &Instance,
         surface_loader: &SurfaceLoader,
         surface: &SurfaceKHR,
-    ) -> Result<(
-        vk::PhysicalDevice,
-        SurfaceCapabilitiesKHR,
-        Vec<SurfaceFormatKHR>,
-        Vec<PresentModeKHR>,
-    )> {
+    ) -> Result<(vk::PhysicalDevice, QueueIndices, SwapchainContext)> {
         for physical_device in unsafe { instance.enumerate_physical_devices() }? {
             let properties_device =
                 unsafe { instance.get_physical_device_properties(physical_device) };
@@ -174,9 +200,9 @@ impl Vulkan {
                 .iter()
                 .position(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
                 .map(|i| i as u32);
-            if let None = queue_graphics {
+            let Some(queue_graphics) = queue_graphics else {
                 continue;
-            }
+            };
 
             let queue_present = (0..properties_queues.len())
                 .position(|queue_index| unsafe {
@@ -189,9 +215,9 @@ impl Vulkan {
                         .is_ok()
                 })
                 .map(|i| i as u32);
-            if let None = queue_present {
+            let Some(queue_present) = queue_present else {
                 continue;
-            }
+            };
 
             let extensions_available =
                 unsafe { instance.enumerate_device_extension_properties(physical_device) }?
@@ -238,14 +264,63 @@ impl Vulkan {
                 continue;
             }
 
-            return Ok((
-                physical_device,
-                swapchain_capabilities,
-                swapchain_formats,
-                swapchain_present_modes,
-            ));
+            let queue_indices = QueueIndices {
+                graphics: queue_graphics,
+                present: queue_present,
+            };
+
+            let swapchain_context = SwapchainContext {
+                capabilities: swapchain_capabilities,
+                formats: swapchain_formats,
+                present_modes: swapchain_present_modes,
+            };
+            return Ok((physical_device, queue_indices, swapchain_context));
         }
         return Err(anyhow!("No suitable physical device found"));
+    }
+
+    fn create_logical_device(
+        instance: &Instance,
+        physical_device: &PhysicalDevice,
+        queue_indices: &QueueIndices,
+    ) -> Result<DeviceContext> {
+        let mut unique_indices = HashSet::new();
+        unique_indices.insert(queue_indices.graphics);
+        unique_indices.insert(queue_indices.present);
+
+        let queue_priorities = &[1.0];
+        let queue_infos = unique_indices
+            .iter()
+            .map(|i| {
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(*i)
+                    .queue_priorities(queue_priorities)
+            })
+            .collect::<Vec<_>>();
+
+        let extensions = vec![];
+
+        let features = vk::PhysicalDeviceFeatures::default()
+            .sampler_anisotropy(false)
+            .sample_rate_shading(false);
+
+        let info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_infos)
+            .enabled_extension_names(&extensions)
+            .enabled_features(&features);
+
+        let device = unsafe { instance.create_device(*physical_device, &info, None) }?;
+
+        let queue_graphics = unsafe { device.get_device_queue(queue_indices.graphics, 0) };
+        let queue_present = unsafe { device.get_device_queue(queue_indices.present, 0) };
+
+        let device_context = DeviceContext {
+            device,
+            queue_graphics,
+            queue_present,
+        };
+
+        Ok(device_context)
     }
 
     fn get_supported_msaa_sample_count(
@@ -274,14 +349,15 @@ impl Vulkan {
 impl Drop for Vulkan {
     fn drop(&mut self) {
         debug!("Drop Vulkan");
-        unsafe {
-            if let Some(cb) = self.debug_messenger {
-                self.debug_loader.destroy_debug_utils_messenger(cb, None);
-            }
+        unsafe { self.device_context.device.destroy_device(None) };
 
-            self.instance.destroy_instance(None);
-            debug!("Done");
+        unsafe { self.surface_loader.destroy_surface(self.surface, None) };
+
+        if let Some(cb) = self.debug_messenger {
+            unsafe { self.debug_loader.destroy_debug_utils_messenger(cb, None) };
         }
+
+        unsafe { self.instance.destroy_instance(None) };
     }
 }
 

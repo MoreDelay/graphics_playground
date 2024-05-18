@@ -5,8 +5,8 @@ use std::ffi::{c_void, CStr};
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
-    DebugUtilsMessengerEXT, Extent2D, Image, PhysicalDevice, PresentModeKHR,
-    SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
+    DebugUtilsMessengerEXT, Extent2D, Image, ImageView, PhysicalDevice, PresentModeKHR, RenderPass,
+    SampleCountFlags, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
 };
 use log::{debug, error, trace, warn};
 
@@ -22,7 +22,8 @@ struct SwapchainContext {
     swapchain_loader: SwapchainLoader,
     swapchain: SwapchainKHR,
     swapchain_images: Vec<Image>,
-    swapchain_format_used: SurfaceFormatKHR,
+    swapchain_image_views: Vec<ImageView>,
+    swapchain_format: SurfaceFormatKHR,
     swapchain_extent: Extent2D,
 }
 
@@ -35,6 +36,13 @@ struct SwapchainSupport {
 struct QueueIndices {
     graphics: u32,
     present: u32,
+}
+
+struct PhysicalDeviceContext {
+    physical_device: PhysicalDevice,
+    queue_index_graphics: u32,
+    queue_index_present: u32,
+    msaa_samples: SampleCountFlags,
 }
 
 struct DeviceContext {
@@ -50,12 +58,12 @@ pub struct Vulkan {
     surface_loader: SurfaceLoader,
     debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
     surface: vk::SurfaceKHR,
-    physical_device: PhysicalDevice,
 
-    queue_indices: QueueIndices,
+    physical_device_context: PhysicalDeviceContext,
     swapchain_support: SwapchainSupport,
     device_context: DeviceContext,
     swapchain_context: SwapchainContext,
+    render_pass: RenderPass,
 }
 
 impl Vulkan {
@@ -74,13 +82,15 @@ impl Vulkan {
             )
         }?;
 
-        let (physical_device, queue_indices, swapchain_support) =
+        let (physical_device_context, swapchain_support) =
             Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
 
-        let msaa_samples = Vulkan::get_supported_msaa_sample_count(&instance, &physical_device);
+        let msaa_samples = Vulkan::get_supported_msaa_sample_count(
+            &instance,
+            &physical_device_context.physical_device,
+        );
 
-        let device_context =
-            Vulkan::create_logical_device(&instance, &physical_device, &queue_indices)?;
+        let device_context = Vulkan::create_logical_device(&instance, &physical_device_context)?;
 
         let swapchain_context = Vulkan::create_swapchain(
             &instance,
@@ -88,7 +98,14 @@ impl Vulkan {
             &window,
             &surface,
             &swapchain_support,
-            &queue_indices,
+            &physical_device_context,
+        )?;
+
+        let render_pass = Vulkan::create_render_pass(
+            &instance,
+            &device_context.device,
+            &physical_device_context,
+            &swapchain_context,
         )?;
 
         return Ok(Self {
@@ -98,11 +115,11 @@ impl Vulkan {
             surface_loader,
             debug_messenger,
             surface,
-            physical_device,
-            queue_indices,
+            physical_device_context,
             swapchain_support,
             device_context,
             swapchain_context,
+            render_pass,
         });
     }
 
@@ -196,7 +213,7 @@ impl Vulkan {
         instance: &Instance,
         surface_loader: &SurfaceLoader,
         surface: &SurfaceKHR,
-    ) -> Result<(vk::PhysicalDevice, QueueIndices, SwapchainSupport)> {
+    ) -> Result<(PhysicalDeviceContext, SwapchainSupport)> {
         for physical_device in unsafe { instance.enumerate_physical_devices() }? {
             let properties_device =
                 unsafe { instance.get_physical_device_properties(physical_device) };
@@ -289,24 +306,45 @@ impl Vulkan {
                 present: queue_present,
             };
 
+            let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
+                & properties_device.limits.framebuffer_depth_sample_counts;
+            let msaa_samples = [
+                vk::SampleCountFlags::TYPE_64,
+                vk::SampleCountFlags::TYPE_32,
+                vk::SampleCountFlags::TYPE_16,
+                vk::SampleCountFlags::TYPE_8,
+                vk::SampleCountFlags::TYPE_4,
+                vk::SampleCountFlags::TYPE_2,
+            ]
+            .iter()
+            .find(|c| msaa_counts.contains(**c))
+            .cloned()
+            .unwrap_or(vk::SampleCountFlags::TYPE_1);
+
+            let physical_device_context = PhysicalDeviceContext {
+                physical_device,
+                queue_index_graphics: queue_graphics,
+                queue_index_present: queue_present,
+                msaa_samples,
+            };
+
             let swapchain_support = SwapchainSupport {
                 capabilities: swapchain_capabilities,
                 formats: swapchain_formats,
                 present_modes: swapchain_present_modes,
             };
-            return Ok((physical_device, queue_indices, swapchain_support));
+            return Ok((physical_device_context, swapchain_support));
         }
         return Err(anyhow!("No suitable physical device found"));
     }
 
     fn create_logical_device(
         instance: &Instance,
-        physical_device: &PhysicalDevice,
-        queue_indices: &QueueIndices,
+        physical_device_context: &PhysicalDeviceContext,
     ) -> Result<DeviceContext> {
         let mut unique_indices = HashSet::new();
-        unique_indices.insert(queue_indices.graphics);
-        unique_indices.insert(queue_indices.present);
+        unique_indices.insert(physical_device_context.queue_index_graphics);
+        unique_indices.insert(physical_device_context.queue_index_present);
 
         let queue_priorities = &[1.0];
         let queue_infos = unique_indices
@@ -329,10 +367,14 @@ impl Vulkan {
             .enabled_extension_names(&extensions)
             .enabled_features(&features);
 
-        let device = unsafe { instance.create_device(*physical_device, &info, None) }?;
+        let device = unsafe {
+            instance.create_device(physical_device_context.physical_device, &info, None)
+        }?;
 
-        let queue_graphics = unsafe { device.get_device_queue(queue_indices.graphics, 0) };
-        let queue_present = unsafe { device.get_device_queue(queue_indices.present, 0) };
+        let queue_graphics =
+            unsafe { device.get_device_queue(physical_device_context.queue_index_graphics, 0) };
+        let queue_present =
+            unsafe { device.get_device_queue(physical_device_context.queue_index_present, 0) };
 
         let device_context = DeviceContext {
             device,
@@ -349,9 +391,9 @@ impl Vulkan {
         window: &winit::window::Window,
         surface: &SurfaceKHR,
         swapchain_support: &SwapchainSupport,
-        queue_indices: &QueueIndices,
+        physical_device_context: &PhysicalDeviceContext,
     ) -> Result<SwapchainContext> {
-        let swapchain_format_used = swapchain_support
+        let swapchain_format = swapchain_support
             .formats
             .iter()
             .find(|f| {
@@ -392,9 +434,11 @@ impl Vulkan {
 
         // If queues are separate, use concurrent so we do not have to deal with ownership.
         let mut queue_family_indices = vec![];
-        let image_sharing_mode = if queue_indices.graphics != queue_indices.present {
-            queue_family_indices.push(queue_indices.graphics);
-            queue_family_indices.push(queue_indices.present);
+        let image_sharing_mode = if physical_device_context.queue_index_graphics
+            != physical_device_context.queue_index_present
+        {
+            queue_family_indices.push(physical_device_context.queue_index_graphics);
+            queue_family_indices.push(physical_device_context.queue_index_present);
             vk::SharingMode::CONCURRENT
         } else {
             vk::SharingMode::EXCLUSIVE
@@ -403,8 +447,8 @@ impl Vulkan {
         let info = vk::SwapchainCreateInfoKHR::default()
             .surface(*surface)
             .min_image_count(image_count)
-            .image_format(swapchain_format_used.format)
-            .image_color_space(swapchain_format_used.color_space)
+            .image_format(swapchain_format.format)
+            .image_color_space(swapchain_format.color_space)
             .image_extent(swapchain_extent)
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
@@ -420,15 +464,154 @@ impl Vulkan {
         let swapchain = unsafe { swapchain_loader.create_swapchain(&info, None) }?;
         let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }?;
 
+        let swapchain_image_views = swapchain_images
+            .iter()
+            .map(|i| {
+                let components = vk::ComponentMapping::default()
+                    .r(vk::ComponentSwizzle::IDENTITY)
+                    .g(vk::ComponentSwizzle::IDENTITY)
+                    .b(vk::ComponentSwizzle::IDENTITY)
+                    .a(vk::ComponentSwizzle::IDENTITY);
+                let subresource_range = vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1);
+
+                let info = vk::ImageViewCreateInfo::default()
+                    .image(*i)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(swapchain_format.format)
+                    .components(components)
+                    .subresource_range(subresource_range);
+
+                unsafe { device.create_image_view(&info, None) }.unwrap()
+            })
+            .collect::<Vec<_>>();
+
         let swapchain_context = SwapchainContext {
             swapchain_loader,
             swapchain,
             swapchain_images,
-            swapchain_format_used,
+            swapchain_image_views,
+            swapchain_format,
             swapchain_extent,
         };
 
         Ok(swapchain_context)
+    }
+
+    fn create_render_pass(
+        instance: &Instance,
+        device: &Device,
+        physical_device_context: &PhysicalDeviceContext,
+        swapchain_context: &SwapchainContext,
+    ) -> Result<RenderPass> {
+        let color_attachment = vk::AttachmentDescription::default()
+            .format(swapchain_context.swapchain_format.format)
+            .samples(physical_device_context.msaa_samples)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let depth_format_candidates = &[
+            vk::Format::D32_SFLOAT,
+            vk::Format::D32_SFLOAT_S8_UINT,
+            vk::Format::D24_UNORM_S8_UINT,
+        ];
+
+        let depth_format = depth_format_candidates
+            .iter()
+            .find(|f| {
+                let properties = unsafe {
+                    instance.get_physical_device_format_properties(
+                        physical_device_context.physical_device,
+                        **f,
+                    )
+                };
+                properties
+                    .optimal_tiling_features
+                    .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+            })
+            .cloned()
+            .unwrap();
+
+        let depth_stencil_attachment = vk::AttachmentDescription::default()
+            .format(depth_format)
+            .samples(physical_device_context.msaa_samples)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+        let color_resolve_attachment = vk::AttachmentDescription::default()
+            .format(swapchain_context.swapchain_format.format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+
+        let color_attachment_ref = vk::AttachmentReference::default()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let depth_stencil_attachment_ref = vk::AttachmentReference::default()
+            .attachment(1)
+            .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+        let color_resolve_attachment_ref = vk::AttachmentReference::default()
+            .attachment(2)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let color_attachments = &[color_attachment_ref];
+        let resolve_attachments = &[color_resolve_attachment_ref];
+        let subpass = vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(color_attachments)
+            .depth_stencil_attachment(&depth_stencil_attachment_ref)
+            .resolve_attachments(resolve_attachments);
+
+        let dependency = vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            );
+
+        let attachments = &[
+            color_attachment,
+            depth_stencil_attachment,
+            color_resolve_attachment,
+        ];
+        let subpasses = &[subpass];
+        let dependencies = &[dependency];
+        let info = vk::RenderPassCreateInfo::default()
+            .attachments(attachments)
+            .subpasses(subpasses)
+            .dependencies(dependencies);
+
+        let render_pass = unsafe { device.create_render_pass(&info, None) }?;
+
+        Ok(render_pass)
     }
 
     fn get_supported_msaa_sample_count(
@@ -457,6 +640,17 @@ impl Vulkan {
 impl Drop for Vulkan {
     fn drop(&mut self) {
         debug!("Drop Vulkan");
+        unsafe {
+            self.device_context
+                .device
+                .destroy_render_pass(self.render_pass, None)
+        };
+
+        self.swapchain_context
+            .swapchain_image_views
+            .iter()
+            .for_each(|i| unsafe { self.device_context.device.destroy_image_view(*i, None) });
+
         unsafe {
             self.swapchain_context
                 .swapchain_loader

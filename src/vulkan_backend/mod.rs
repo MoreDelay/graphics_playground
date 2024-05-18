@@ -85,11 +85,6 @@ impl Vulkan {
         let (physical_device_context, swapchain_support) =
             Vulkan::select_physical_device(&instance, &surface_loader, &surface)?;
 
-        let msaa_samples = Vulkan::get_supported_msaa_sample_count(
-            &instance,
-            &physical_device_context.physical_device,
-        );
-
         let device_context = Vulkan::create_logical_device(&instance, &physical_device_context)?;
 
         let swapchain_context = Vulkan::create_swapchain(
@@ -612,28 +607,6 @@ impl Vulkan {
         let render_pass = unsafe { device.create_render_pass(&info, None) }?;
 
         Ok(render_pass)
-    }
-
-    fn get_supported_msaa_sample_count(
-        instance: &Instance,
-        physical_device: &PhysicalDevice,
-    ) -> vk::SampleCountFlags {
-        let properties_device =
-            unsafe { instance.get_physical_device_properties(*physical_device) };
-        let msaa_counts = properties_device.limits.framebuffer_color_sample_counts
-            & properties_device.limits.framebuffer_depth_sample_counts;
-        [
-            vk::SampleCountFlags::TYPE_64,
-            vk::SampleCountFlags::TYPE_32,
-            vk::SampleCountFlags::TYPE_16,
-            vk::SampleCountFlags::TYPE_8,
-            vk::SampleCountFlags::TYPE_4,
-            vk::SampleCountFlags::TYPE_2,
-        ]
-        .iter()
-        .find(|c| msaa_counts.contains(**c))
-        .cloned()
-        .unwrap_or(vk::SampleCountFlags::TYPE_1)
     }
 }
 

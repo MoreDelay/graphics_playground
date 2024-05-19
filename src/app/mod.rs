@@ -5,7 +5,7 @@ use winit::{
     window::Window,
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use log::info;
 
 use crate::vulkan_backend::Vulkan;
@@ -68,8 +68,11 @@ impl App {
         Ok(())
     }
 
-    fn render(self: &Self) -> Result<()> {
+    fn render(self: &mut Self) -> Result<()> {
         info!("App::render");
-        Ok(())
+        match self.vulkan.as_mut() {
+            Some(vulkan) => vulkan.render(),
+            None => Err(anyhow!("Vulkan not initialized")),
+        }
     }
 }

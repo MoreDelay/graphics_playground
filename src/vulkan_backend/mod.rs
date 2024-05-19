@@ -6,9 +6,9 @@ use std::mem::size_of;
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
-    DebugUtilsMessengerEXT, DescriptorSetLayout, Extent2D, Image, ImageView, PhysicalDevice,
-    Pipeline, PipelineLayout, PresentModeKHR, RenderPass, SampleCountFlags, SurfaceCapabilitiesKHR,
-    SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
+    CommandBuffer, CommandPool, DebugUtilsMessengerEXT, DescriptorSetLayout, Extent2D, Image,
+    ImageView, PhysicalDevice, Pipeline, PipelineLayout, PresentModeKHR, RenderPass,
+    SampleCountFlags, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
 };
 use log::{debug, error, trace, warn};
 
@@ -29,6 +29,12 @@ type Mat4 = cgmath::Matrix4<f32>;
 struct Vertex {
     position: Vec3,
     color: Vec3,
+}
+
+struct CommandContext {
+    command_pool: CommandPool,
+    command_buffer: CommandBuffer,
+    command_buffer_per_image: Vec<CommandBuffer>,
 }
 
 struct PipelineContext {
@@ -84,6 +90,7 @@ pub struct Vulkan {
     swapchain_context: SwapchainContext,
     render_pass: RenderPass,
     pipeline_context: PipelineContext,
+    command_context: CommandContext,
 }
 
 impl Vulkan {
@@ -130,6 +137,12 @@ impl Vulkan {
             &swapchain_context,
         )?;
 
+        let command_context = Vulkan::create_command_buffers(
+            &device_context.device,
+            &physical_device_context,
+            &swapchain_context,
+        )?;
+
         return Ok(Self {
             entry,
             instance,
@@ -143,7 +156,12 @@ impl Vulkan {
             swapchain_context,
             render_pass,
             pipeline_context,
+            command_context,
         });
+    }
+
+    pub fn render(self: &mut Self) -> Result<()> {
+        Ok(())
     }
 
     fn create_instance(
@@ -833,11 +851,63 @@ impl Vulkan {
 
         Ok(pipeline_context)
     }
+
+    fn create_command_pool(device: &Device, queue_family: u32) -> Result<CommandPool> {
+        let info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::empty()) // use transient with push constants
+            .queue_family_index(queue_family);
+
+        let command_pool = unsafe { device.create_command_pool(&info, None) }?;
+
+        Ok(command_pool)
+    }
+
+    fn create_command_buffers(
+        device: &Device,
+        physical_device_context: &PhysicalDeviceContext,
+        swapchain_context: &SwapchainContext,
+    ) -> Result<CommandContext> {
+        let command_pool =
+            Vulkan::create_command_pool(device, physical_device_context.queue_index_graphics)?;
+
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool) // TODO command pool per image
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
+        let command_buffer = unsafe { device.allocate_command_buffers(&allocate_info) }?[0];
+
+        let n_images = swapchain_context.swapchain_images.len();
+        let mut command_buffers = Vec::with_capacity(n_images);
+        for image_index in 0..n_images {
+            let allocate_info = vk::CommandBufferAllocateInfo::default()
+                .command_pool(command_pool) // TODO command pool per image
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+
+            let command_buffer = unsafe { device.allocate_command_buffers(&allocate_info) }?[0];
+            command_buffers.push(command_buffer);
+        }
+
+        let command_context = CommandContext {
+            command_pool,
+            command_buffer,
+            command_buffer_per_image: command_buffers,
+        };
+
+        Ok(command_context)
+    }
 }
 
 impl Drop for Vulkan {
     fn drop(&mut self) {
         debug!("Drop Vulkan");
+        unsafe {
+            self.device_context
+                .device
+                .destroy_command_pool(self.command_context.command_pool, None)
+        };
+
         unsafe {
             self.device_context
                 .device

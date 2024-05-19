@@ -2,11 +2,13 @@
 
 use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
+use std::mem::size_of;
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
-    DebugUtilsMessengerEXT, Extent2D, Image, ImageView, PhysicalDevice, PresentModeKHR, RenderPass,
-    SampleCountFlags, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
+    DebugUtilsMessengerEXT, DescriptorSetLayout, Extent2D, Image, ImageView, PhysicalDevice,
+    Pipeline, PipelineLayout, PresentModeKHR, RenderPass, SampleCountFlags, SurfaceCapabilitiesKHR,
+    SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
 };
 use log::{debug, error, trace, warn};
 
@@ -17,6 +19,23 @@ use ash::{vk, Device, Entry, Instance};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+
+type Vec2 = cgmath::Vector2<f32>;
+type Vec3 = cgmath::Vector3<f32>;
+type Vec4 = cgmath::Vector4<f32>;
+
+type Mat4 = cgmath::Matrix4<f32>;
+
+struct Vertex {
+    position: Vec3,
+    color: Vec3,
+}
+
+struct PipelineContext {
+    graphics_pipeline: Pipeline,
+    descriptor_set_layout: DescriptorSetLayout,
+    pipeline_layout: PipelineLayout,
+}
 
 struct SwapchainContext {
     swapchain_loader: SwapchainLoader,
@@ -64,6 +83,7 @@ pub struct Vulkan {
     device_context: DeviceContext,
     swapchain_context: SwapchainContext,
     render_pass: RenderPass,
+    pipeline_context: PipelineContext,
 }
 
 impl Vulkan {
@@ -103,6 +123,13 @@ impl Vulkan {
             &swapchain_context,
         )?;
 
+        let pipeline_context = Vulkan::create_pipeline(
+            &device_context.device,
+            &render_pass,
+            &physical_device_context,
+            &swapchain_context,
+        )?;
+
         return Ok(Self {
             entry,
             instance,
@@ -115,6 +142,7 @@ impl Vulkan {
             device_context,
             swapchain_context,
             render_pass,
+            pipeline_context,
         });
     }
 
@@ -355,7 +383,7 @@ impl Vulkan {
 
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(false)
-            .sample_rate_shading(false);
+            .sample_rate_shading(true);
 
         let info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
@@ -608,11 +636,225 @@ impl Vulkan {
 
         Ok(render_pass)
     }
+
+    fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::ShaderModule> {
+        let mut cursor = std::io::Cursor::new(bytecode);
+        let shader_code = ash::util::read_spv(&mut cursor)?;
+
+        let info = vk::ShaderModuleCreateInfo::default().code(&shader_code);
+        let module = unsafe { device.create_shader_module(&info, None) }?;
+
+        Ok(module)
+    }
+
+    fn create_pipeline(
+        device: &Device,
+        render_pass: &RenderPass,
+        physical_device_context: &PhysicalDeviceContext,
+        swapchain_context: &SwapchainContext,
+    ) -> Result<PipelineContext> {
+        // Todo: compile on runtime
+        let vert = include_bytes!("../../target/shaders/vert.spv");
+        let frag = include_bytes!("../../target/shaders/frag.spv");
+
+        let shader_module_vert = Vulkan::create_shader_module(device, vert)?;
+        let shader_module_frag = Vulkan::create_shader_module(device, frag)?;
+
+        let stage_vert = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(shader_module_vert)
+            .name(CStr::from_bytes_with_nul(b"main\0")?);
+
+        let stage_frag = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(shader_module_frag)
+            .name(CStr::from_bytes_with_nul(b"main\0")?);
+
+        let vertex_binding_descriptions = &[vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+
+        let vertex_attribute_descriptions = &[
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(0),
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(1)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(size_of::<Vec3>() as u32),
+        ];
+
+        let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(vertex_binding_descriptions)
+            .vertex_attribute_descriptions(vertex_attribute_descriptions);
+
+        let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let viewports = &[vk::Viewport::default()
+            .x(0.0)
+            .y(0.0)
+            .width(swapchain_context.swapchain_extent.width as f32)
+            .height(swapchain_context.swapchain_extent.height as f32)
+            .min_depth(0.0)
+            .max_depth(1.0)];
+
+        let scissors = &[vk::Rect2D::default()
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(swapchain_context.swapchain_extent)];
+
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
+            .viewports(viewports)
+            .scissors(scissors);
+
+        let rasterization_state_info = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisample_state_info = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(true)
+            .min_sample_shading(0.2)
+            .rasterization_samples(physical_device_context.msaa_samples);
+
+        let color_blend_attachments = &[vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD)];
+
+        let color_blend_state_info = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::COPY)
+            .attachments(color_blend_attachments)
+            .blend_constants([0.0, 0.0, 0.0, 0.0]);
+
+        let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::LINE_WIDTH];
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
+
+        let push_constant_range_vert = vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(size_of::<Mat4>() as u32);
+
+        // let push_constant_range_frag = vk::PushConstantRange::default()
+        //     .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+        //     .offset(size_of::<Mat4>() as u32)
+        //     .size(size_of::<f32>() as u32);
+
+        let ubo_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX);
+
+        let sampler_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+
+        let bindings = &[ubo_binding, sampler_binding];
+        let descriptor_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
+
+        let descriptor_set_layout =
+            unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }?;
+
+        let set_layouts = &[descriptor_set_layout];
+        let push_constant_ranges = &[push_constant_range_vert];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(set_layouts)
+            .push_constant_ranges(push_constant_ranges);
+
+        let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }?;
+
+        let depth_stencil_state_info = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_bounds_test_enable(false)
+            .min_depth_bounds(0.0)
+            .max_depth_bounds(1.0)
+            .stencil_test_enable(false)
+            .front(vk::StencilOpState::default())
+            .back(vk::StencilOpState::default());
+
+        let stages = &[stage_vert, stage_frag];
+        let graphics_pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(stages)
+            .vertex_input_state(&vertex_input_state_info)
+            .input_assembly_state(&vertex_input_assembly_state_info)
+            .viewport_state(&viewport_state_info)
+            .rasterization_state(&rasterization_state_info)
+            .multisample_state(&multisample_state_info)
+            .depth_stencil_state(&depth_stencil_state_info)
+            .color_blend_state(&color_blend_state_info)
+            .layout(pipeline_layout)
+            .render_pass(*render_pass)
+            .subpass(0)
+            .base_pipeline_handle(vk::Pipeline::null())
+            .base_pipeline_index(-1);
+
+        let Ok(graphics_pipelines) = (unsafe {
+            device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[graphics_pipeline_info],
+                None,
+            )
+        }) else {
+            return Err(anyhow!("Pipeline could not be created"));
+        };
+
+        let graphics_pipeline = graphics_pipelines[0];
+
+        unsafe { device.destroy_shader_module(shader_module_frag, None) };
+        unsafe { device.destroy_shader_module(shader_module_vert, None) };
+
+        let pipeline_context = PipelineContext {
+            graphics_pipeline,
+            descriptor_set_layout,
+            pipeline_layout,
+        };
+
+        Ok(pipeline_context)
+    }
 }
 
 impl Drop for Vulkan {
     fn drop(&mut self) {
         debug!("Drop Vulkan");
+        unsafe {
+            self.device_context
+                .device
+                .destroy_pipeline(self.pipeline_context.graphics_pipeline, None)
+        };
+        unsafe {
+            self.device_context
+                .device
+                .destroy_pipeline_layout(self.pipeline_context.pipeline_layout, None)
+        };
+
+        unsafe {
+            self.device_context
+                .device
+                .destroy_descriptor_set_layout(self.pipeline_context.descriptor_set_layout, None)
+        };
+
         unsafe {
             self.device_context
                 .device

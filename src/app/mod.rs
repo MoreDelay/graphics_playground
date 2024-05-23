@@ -70,8 +70,13 @@ impl App {
 
     fn render(self: &mut Self) -> Result<()> {
         info!("App::render");
+        let window = self
+            .window
+            .as_ref()
+            .ok_or(anyhow!("No window to render to"))?;
+
         match self.vulkan.as_mut() {
-            Some(vulkan) => vulkan.render(),
+            Some(vulkan) => vulkan.render(window),
             None => Err(anyhow!("Vulkan not initialized")),
         }
     }

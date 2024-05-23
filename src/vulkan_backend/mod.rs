@@ -6,9 +6,10 @@ use std::mem::size_of;
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
-    CommandBuffer, CommandPool, DebugUtilsMessengerEXT, DescriptorSetLayout, Extent2D, Image,
-    ImageView, PhysicalDevice, Pipeline, PipelineLayout, PresentModeKHR, RenderPass,
-    SampleCountFlags, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
+    CommandBuffer, CommandPool, DebugUtilsMessengerEXT, DescriptorSetLayout, DeviceMemory,
+    Extent2D, Fence, Format, Framebuffer, Handle, Image, ImageView, PhysicalDevice, Pipeline,
+    PipelineLayout, PresentModeKHR, RenderPass, SampleCountFlags, Semaphore,
+    SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR, SwapchainKHR,
 };
 use log::{debug, error, trace, warn};
 
@@ -31,10 +32,38 @@ struct Vertex {
     color: Vec3,
 }
 
+struct RenderContext {
+    next_frame: usize,
+}
+
+struct SyncObjects {
+    image_available_semaphores: Vec<Semaphore>,
+    render_finished_semaphores: Vec<Semaphore>,
+    in_flight_fences: Vec<Fence>,
+    images_in_flight: Vec<Fence>,
+}
+
 struct CommandContext {
     command_pool: CommandPool,
     command_buffer: CommandBuffer,
     command_buffer_per_image: Vec<CommandBuffer>,
+}
+
+struct RenderObjects {
+    color_image_view: ImageView,
+    depth_image_view: ImageView,
+    color_image_context: ImageContext,
+    depth_image_context: ImageContext,
+}
+
+struct RenderPassContext {
+    render_pass: RenderPass,
+    depth_format: Format,
+}
+
+struct ImageContext {
+    image: Image,
+    image_memory: DeviceMemory,
 }
 
 struct PipelineContext {
@@ -83,14 +112,18 @@ pub struct Vulkan {
     surface_loader: SurfaceLoader,
     debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
     surface: vk::SurfaceKHR,
+    render_objects: RenderObjects,
+    sync_objects: SyncObjects,
+    framebuffers: Vec<Framebuffer>,
 
     physical_device_context: PhysicalDeviceContext,
     swapchain_support: SwapchainSupport,
     device_context: DeviceContext,
     swapchain_context: SwapchainContext,
-    render_pass: RenderPass,
+    render_pass_context: RenderPassContext,
     pipeline_context: PipelineContext,
     command_context: CommandContext,
+    render_context: RenderContext,
 }
 
 impl Vulkan {
@@ -123,7 +156,7 @@ impl Vulkan {
             &physical_device_context,
         )?;
 
-        let render_pass = Vulkan::create_render_pass(
+        let render_pass_context = Vulkan::create_render_pass(
             &instance,
             &device_context.device,
             &physical_device_context,
@@ -132,16 +165,37 @@ impl Vulkan {
 
         let pipeline_context = Vulkan::create_pipeline(
             &device_context.device,
-            &render_pass,
+            &render_pass_context,
             &physical_device_context,
             &swapchain_context,
+        )?;
+
+        let render_objects = Vulkan::create_render_objects(
+            &instance,
+            &device_context.device,
+            &physical_device_context,
+            &swapchain_context,
+            &render_pass_context,
+        )?;
+
+        let framebuffers = Vulkan::create_frame_buffers(
+            &device_context.device,
+            &swapchain_context,
+            &render_pass_context,
+            &render_objects,
         )?;
 
         let command_context = Vulkan::create_command_buffers(
             &device_context.device,
             &physical_device_context,
             &swapchain_context,
+            &framebuffers,
         )?;
+
+        let sync_objects =
+            Vulkan::create_sync_objects(&device_context.device, &swapchain_context, 2)?;
+
+        let render_context = RenderContext { next_frame: 0 };
 
         return Ok(Self {
             entry,
@@ -154,13 +208,105 @@ impl Vulkan {
             swapchain_support,
             device_context,
             swapchain_context,
-            render_pass,
+            render_pass_context,
             pipeline_context,
             command_context,
+            render_objects,
+            framebuffers,
+            sync_objects,
+            render_context,
         });
     }
 
-    pub fn render(self: &mut Self) -> Result<()> {
+    pub fn render(self: &mut Self, window: &winit::window::Window) -> Result<()> {
+        let in_flight_fence = self.sync_objects.in_flight_fences[self.render_context.next_frame];
+        unsafe {
+            self.device_context
+                .device
+                .wait_for_fences(&[in_flight_fence], true, u64::MAX)
+        }?;
+
+        let image_index = unsafe {
+            self.swapchain_context.swapchain_loader.acquire_next_image(
+                self.swapchain_context.swapchain,
+                u64::MAX,
+                self.sync_objects.image_available_semaphores[self.render_context.next_frame],
+                vk::Fence::null(),
+            )
+        };
+
+        let image_index = match image_index {
+            Ok((image_index, _)) => image_index as usize,
+            // Err(vk::Result::ERROR_OUT_OF_DATE_KHR) =>
+            Err(e) => return Err(anyhow!(e)),
+        };
+
+        let image_in_flight = self.sync_objects.images_in_flight[image_index];
+        if !image_in_flight.is_null() {
+            unsafe {
+                self.device_context
+                    .device
+                    .wait_for_fences(&[image_in_flight], true, u64::MAX)
+            }?;
+        }
+        self.sync_objects.images_in_flight[image_index] = in_flight_fence;
+
+        Vulkan::update_command_buffer(
+            &self.device_context.device,
+            &mut self.command_context,
+            &self.swapchain_context,
+            &self.pipeline_context,
+            &self.render_pass_context,
+            &self.framebuffers,
+            image_index,
+        )?;
+
+        let wait_semaphores =
+            &[self.sync_objects.image_available_semaphores[self.render_context.next_frame]];
+        let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let command_buffers = &[self.command_context.command_buffer_per_image[image_index]];
+        let signal_semaphores =
+            &[self.sync_objects.render_finished_semaphores[self.render_context.next_frame]];
+        let submit_info = vk::SubmitInfo::default()
+            .wait_semaphores(wait_semaphores)
+            .wait_dst_stage_mask(wait_stages)
+            .command_buffers(command_buffers)
+            .signal_semaphores(signal_semaphores);
+
+        unsafe {
+            self.device_context
+                .device
+                .reset_fences(&[self.sync_objects.in_flight_fences[self.render_context.next_frame]])
+        }?;
+
+        unsafe {
+            self.device_context.device.queue_submit(
+                self.device_context.queue_graphics,
+                &[submit_info],
+                self.sync_objects.in_flight_fences[self.render_context.next_frame],
+            )
+        }?;
+
+        let swapchains = &[self.swapchain_context.swapchain];
+        let image_indices = &[image_index as u32];
+        let present_info = vk::PresentInfoKHR::default()
+            .wait_semaphores(wait_semaphores)
+            .swapchains(swapchains)
+            .image_indices(image_indices);
+
+        let result = unsafe {
+            self.swapchain_context
+                .swapchain_loader
+                .queue_present(self.device_context.queue_present, &present_info)
+        };
+        let changed = result == Err(vk::Result::SUBOPTIMAL_KHR)
+            || result == Err(vk::Result::ERROR_OUT_OF_DATE_KHR);
+
+        // if changed  || self.resized {
+        //
+        // }
+
+        self.render_context.next_frame = (self.render_context.next_frame + 1) % 2;
         Ok(())
     }
 
@@ -508,26 +654,13 @@ impl Vulkan {
         let swapchain_image_views = swapchain_images
             .iter()
             .map(|i| {
-                let components = vk::ComponentMapping::default()
-                    .r(vk::ComponentSwizzle::IDENTITY)
-                    .g(vk::ComponentSwizzle::IDENTITY)
-                    .b(vk::ComponentSwizzle::IDENTITY)
-                    .a(vk::ComponentSwizzle::IDENTITY);
-                let subresource_range = vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1);
-
-                let info = vk::ImageViewCreateInfo::default()
-                    .image(*i)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(swapchain_format.format)
-                    .components(components)
-                    .subresource_range(subresource_range);
-
-                unsafe { device.create_image_view(&info, None) }.unwrap()
+                Vulkan::create_image_view(
+                    device,
+                    i,
+                    &swapchain_format.format,
+                    vk::ImageAspectFlags::COLOR,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
 
@@ -548,7 +681,7 @@ impl Vulkan {
         device: &Device,
         physical_device_context: &PhysicalDeviceContext,
         swapchain_context: &SwapchainContext,
-    ) -> Result<RenderPass> {
+    ) -> Result<RenderPassContext> {
         let color_attachment = vk::AttachmentDescription::default()
             .format(swapchain_context.swapchain_format.format)
             .samples(physical_device_context.msaa_samples)
@@ -652,7 +785,12 @@ impl Vulkan {
 
         let render_pass = unsafe { device.create_render_pass(&info, None) }?;
 
-        Ok(render_pass)
+        let render_pass_context = RenderPassContext {
+            render_pass,
+            depth_format,
+        };
+
+        Ok(render_pass_context)
     }
 
     fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::ShaderModule> {
@@ -667,7 +805,7 @@ impl Vulkan {
 
     fn create_pipeline(
         device: &Device,
-        render_pass: &RenderPass,
+        render_pass_context: &RenderPassContext,
         physical_device_context: &PhysicalDeviceContext,
         swapchain_context: &SwapchainContext,
     ) -> Result<PipelineContext> {
@@ -823,7 +961,7 @@ impl Vulkan {
             .depth_stencil_state(&depth_stencil_state_info)
             .color_blend_state(&color_blend_state_info)
             .layout(pipeline_layout)
-            .render_pass(*render_pass)
+            .render_pass(render_pass_context.render_pass)
             .subpass(0)
             .base_pipeline_handle(vk::Pipeline::null())
             .base_pipeline_index(-1);
@@ -852,6 +990,121 @@ impl Vulkan {
         Ok(pipeline_context)
     }
 
+    fn create_image(
+        instance: &Instance,
+        device: &Device,
+        physical_device_context: &PhysicalDeviceContext,
+        swapchain_context: &SwapchainContext,
+        format: &Format,
+        usage: vk::ImageUsageFlags,
+    ) -> Result<ImageContext> {
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width: swapchain_context.swapchain_extent.width,
+                height: swapchain_context.swapchain_extent.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(*format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(physical_device_context.msaa_samples)
+            .flags(vk::ImageCreateFlags::empty());
+        let image = unsafe { device.create_image(&info, None) }?;
+
+        let requirements = unsafe { device.get_image_memory_requirements(image) };
+        let memory_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device_context.physical_device)
+        };
+        let memory_type_index = (0..memory_properties.memory_type_count)
+            .find(|i| {
+                let suitable = (requirements.memory_type_bits & (1 << i)) != 0;
+                let mem_type = memory_properties.memory_types[*i as usize];
+                suitable
+                    && mem_type
+                        .property_flags
+                        .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            })
+            .ok_or_else(|| anyhow!("No suitable memory type"))?;
+
+        let mem_alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index);
+        let image_memory = unsafe { device.allocate_memory(&mem_alloc_info, None) }?;
+
+        unsafe { device.bind_image_memory(image, image_memory, 0) }?;
+
+        let image_context = ImageContext {
+            image,
+            image_memory,
+        };
+
+        Ok(image_context)
+    }
+
+    fn create_image_view(
+        device: &Device,
+        image: &Image,
+        format: &vk::Format,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<ImageView> {
+        let components = vk::ComponentMapping::default()
+            .r(vk::ComponentSwizzle::IDENTITY)
+            .g(vk::ComponentSwizzle::IDENTITY)
+            .b(vk::ComponentSwizzle::IDENTITY)
+            .a(vk::ComponentSwizzle::IDENTITY);
+        let subresource_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(aspect)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1);
+
+        let info = vk::ImageViewCreateInfo::default()
+            .image(*image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(*format)
+            .components(components)
+            .subresource_range(subresource_range);
+
+        let image_view = unsafe { device.create_image_view(&info, None) }?;
+
+        Ok(image_view)
+    }
+
+    fn create_frame_buffers(
+        device: &Device,
+        swapchain_context: &SwapchainContext,
+        render_pass_context: &RenderPassContext,
+        render_objects: &RenderObjects,
+    ) -> Result<Vec<Framebuffer>> {
+        let framebuffers = swapchain_context
+            .swapchain_image_views
+            .iter()
+            .map(|i| {
+                let attachments = &[
+                    render_objects.color_image_view,
+                    render_objects.depth_image_view,
+                    *i,
+                ];
+                let info = vk::FramebufferCreateInfo::default()
+                    .render_pass(render_pass_context.render_pass)
+                    .attachments(attachments)
+                    .width(swapchain_context.swapchain_extent.width)
+                    .height(swapchain_context.swapchain_extent.height)
+                    .layers(1);
+
+                unsafe { device.create_framebuffer(&info, None) }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(framebuffers)
+    }
+
     fn create_command_pool(device: &Device, queue_family: u32) -> Result<CommandPool> {
         let info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::empty()) // use transient with push constants
@@ -866,6 +1119,7 @@ impl Vulkan {
         device: &Device,
         physical_device_context: &PhysicalDeviceContext,
         swapchain_context: &SwapchainContext,
+        framebuffers: &Vec<Framebuffer>,
     ) -> Result<CommandContext> {
         let command_pool =
             Vulkan::create_command_pool(device, physical_device_context.queue_index_graphics)?;
@@ -896,6 +1150,155 @@ impl Vulkan {
         };
 
         Ok(command_context)
+    }
+
+    fn create_render_objects(
+        instance: &Instance,
+        device: &Device,
+        physical_device_context: &PhysicalDeviceContext,
+        swapchain_context: &SwapchainContext,
+        render_pass_context: &RenderPassContext,
+    ) -> Result<RenderObjects> {
+        let color_image_context = Vulkan::create_image(
+            instance,
+            device,
+            physical_device_context,
+            swapchain_context,
+            &swapchain_context.swapchain_format.format,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+        )?;
+        let color_image_view = Vulkan::create_image_view(
+            device,
+            &color_image_context.image,
+            &swapchain_context.swapchain_format.format,
+            vk::ImageAspectFlags::COLOR,
+        )?;
+
+        let depth_image_context = Vulkan::create_image(
+            instance,
+            device,
+            physical_device_context,
+            swapchain_context,
+            &render_pass_context.depth_format,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        )?;
+        let depth_image_view = Vulkan::create_image_view(
+            device,
+            &depth_image_context.image,
+            &render_pass_context.depth_format,
+            vk::ImageAspectFlags::DEPTH,
+        )?;
+
+        let render_objects = RenderObjects {
+            color_image_view,
+            depth_image_view,
+            color_image_context,
+            depth_image_context,
+        };
+
+        Ok(render_objects)
+    }
+
+    fn create_sync_objects(
+        device: &Device,
+        swapchain_context: &SwapchainContext,
+        max_frames_in_flight: usize,
+    ) -> Result<SyncObjects> {
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
+        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+        let mut image_available_semaphores = Vec::new();
+        let mut render_finished_semaphores = Vec::new();
+        let mut in_flight_fences = Vec::new();
+        let mut images_in_flight = Vec::new();
+
+        for _ in 0..max_frames_in_flight {
+            image_available_semaphores
+                .push(unsafe { device.create_semaphore(&semaphore_info, None) }?);
+            render_finished_semaphores
+                .push(unsafe { device.create_semaphore(&semaphore_info, None) }?);
+            in_flight_fences.push(unsafe { device.create_fence(&fence_info, None) }?);
+        }
+
+        swapchain_context
+            .swapchain_images
+            .iter()
+            .for_each(|_| images_in_flight.push(vk::Fence::null()));
+
+        let sync_objects = SyncObjects {
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            images_in_flight,
+        };
+
+        Ok(sync_objects)
+    }
+
+    fn update_command_buffer(
+        device: &Device,
+        command_context: &mut CommandContext,
+        swapchain_context: &SwapchainContext,
+        pipeline_context: &PipelineContext,
+        render_pass_context: &RenderPassContext,
+        framebuffers: &Vec<Framebuffer>,
+        image_index: usize,
+    ) -> Result<()> {
+        let command_pool = command_context.command_pool;
+        let command_buffer = command_context.command_buffer_per_image[image_index];
+        unsafe { device.free_command_buffers(command_context.command_pool, &[command_buffer]) };
+
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        let command_buffer = unsafe { device.allocate_command_buffers(&allocate_info) }?[0];
+        command_context.command_buffer_per_image[image_index] = command_buffer;
+
+        let inheritance_info = vk::CommandBufferInheritanceInfo::default();
+
+        let info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .inheritance_info(&inheritance_info);
+
+        unsafe { device.begin_command_buffer(command_buffer, &info) }?;
+        let render_area = vk::Rect2D::default()
+            .offset(vk::Offset2D::default())
+            .extent(swapchain_context.swapchain_extent);
+
+        let color_clear_value = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        };
+
+        let depth_clear_value = vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue {
+                depth: 1.0,
+                stencil: 0,
+            },
+        };
+
+        let clear_values = &[color_clear_value, depth_clear_value];
+        let info = vk::RenderPassBeginInfo::default()
+            .render_pass(render_pass_context.render_pass)
+            .framebuffer(framebuffers[image_index])
+            .render_area(render_area)
+            .clear_values(clear_values);
+
+        unsafe { device.cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::INLINE) };
+        unsafe {
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_context.graphics_pipeline,
+            )
+        };
+        unsafe { device.cmd_draw(command_buffer, 3, 1, 0, 0) };
+        unsafe { device.cmd_end_render_pass(command_buffer) };
+        unsafe { device.end_command_buffer(command_buffer) }?;
+
+        Ok(())
     }
 }
 
@@ -928,7 +1331,7 @@ impl Drop for Vulkan {
         unsafe {
             self.device_context
                 .device
-                .destroy_render_pass(self.render_pass, None)
+                .destroy_render_pass(self.render_pass_context.render_pass, None)
         };
 
         self.swapchain_context

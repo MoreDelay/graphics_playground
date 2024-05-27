@@ -884,7 +884,7 @@ impl Vulkan {
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
             .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .front_face(vk::FrontFace::CLOCKWISE)
             .depth_bias_enable(false);
 
         let multisample_state_info = vk::PipelineMultisampleStateCreateInfo::default()
@@ -941,11 +941,11 @@ impl Vulkan {
         let descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }?;
 
-        let set_layouts = &[descriptor_set_layout];
-        let push_constant_ranges = &[push_constant_range_vert];
-        let layout_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(set_layouts)
-            .push_constant_ranges(push_constant_ranges);
+        // let set_layouts = &[descriptor_set_layout];
+        // let push_constant_ranges = &[push_constant_range_vert];
+        let layout_info = vk::PipelineLayoutCreateInfo::default();
+        // .set_layouts(set_layouts)
+        // .push_constant_ranges(push_constant_ranges);
 
         let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }?;
 

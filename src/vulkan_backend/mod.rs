@@ -32,6 +32,16 @@ struct Vertex {
     color: Vec3,
 }
 
+struct VertexBuffer {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+}
+
+struct IndexBuffer {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+}
+
 struct RenderContext {
     next_frame: usize,
 }
@@ -290,7 +300,7 @@ impl Vulkan {
         let swapchains = &[self.swapchain_context.swapchain];
         let image_indices = &[image_index as u32];
         let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(wait_semaphores)
+            .wait_semaphores(signal_semaphores)
             .swapchains(swapchains)
             .image_indices(image_indices);
 
@@ -844,9 +854,9 @@ impl Vulkan {
                 .offset(size_of::<Vec3>() as u32),
         ];
 
-        let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(vertex_binding_descriptions)
-            .vertex_attribute_descriptions(vertex_attribute_descriptions);
+        let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::default();
+        // .vertex_binding_descriptions(vertex_binding_descriptions)
+        // .vertex_attribute_descriptions(vertex_attribute_descriptions);
 
         let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -1294,10 +1304,17 @@ impl Vulkan {
                 pipeline_context.graphics_pipeline,
             )
         };
+
+        // unsafe { device.cmd_bind_vertex_buffers(command_buffer, 0, &[], &[0]) };
+
         unsafe { device.cmd_draw(command_buffer, 3, 1, 0, 0) };
         unsafe { device.cmd_end_render_pass(command_buffer) };
         unsafe { device.end_command_buffer(command_buffer) }?;
 
+        Ok(())
+    }
+
+    fn create_vertex_buffer() -> Result<()> {
         Ok(())
     }
 }

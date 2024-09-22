@@ -2,7 +2,11 @@
 
 use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
+use std::fs::File;
+use std::io::Read;
 use std::mem::size_of;
+use std::path::PathBuf;
+use std::{env, fs};
 
 use anyhow::{anyhow, Result};
 use ash::vk::{
@@ -813,6 +817,17 @@ impl Vulkan {
         Ok(module)
     }
 
+    fn read_shader(filename: &str) -> Vec<u8> {
+        let out_dir = env::var_os("OUT_DIR").unwrap();
+        let out_dir = PathBuf::from(out_dir);
+        let path = out_dir.join(filename);
+        let mut file = File::open(&path).expect("vertex shader not found");
+        let metadata = fs::metadata(&path).expect("could not read file length");
+        let mut shader = vec![0; metadata.len() as usize];
+        file.read(&mut shader).expect("buffer overflow");
+        shader
+    }
+
     fn create_pipeline(
         device: &Device,
         render_pass_context: &RenderPassContext,
@@ -820,11 +835,11 @@ impl Vulkan {
         swapchain_context: &SwapchainContext,
     ) -> Result<PipelineContext> {
         // Todo: compile on runtime
-        let vert = include_bytes!("../../target/shaders/vert.spv");
-        let frag = include_bytes!("../../target/shaders/frag.spv");
+        let vert = Vulkan::read_shader("vert.spv");
+        let frag = Vulkan::read_shader("frag.spv");
 
-        let shader_module_vert = Vulkan::create_shader_module(device, vert)?;
-        let shader_module_frag = Vulkan::create_shader_module(device, frag)?;
+        let shader_module_vert = Vulkan::create_shader_module(device, &vert)?;
+        let shader_module_frag = Vulkan::create_shader_module(device, &frag)?;
 
         let stage_vert = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)

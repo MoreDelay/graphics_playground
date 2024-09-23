@@ -7,7 +7,7 @@ fn main() {
     let mut cmd = Command::new("glslang");
     cmd.args([
         "-V100",
-        "src/shaders/triangle.vert",
+        "src/shaders/tutorial.vert",
         "-o",
         out_dir.join("vert.spv").to_str().unwrap(),
     ]);
@@ -16,7 +16,7 @@ fn main() {
     let mut cmd = Command::new("glslang");
     cmd.args([
         "-V100",
-        "src/shaders/triangle.frag",
+        "src/shaders/tutorial.frag",
         "-o",
         out_dir.join("frag.spv").to_str().unwrap(),
     ]);

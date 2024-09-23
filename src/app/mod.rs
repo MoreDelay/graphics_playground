@@ -1,12 +1,13 @@
 use winit::{
     application::ApplicationHandler,
-    event::WindowEvent,
+    event::{ElementState, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
 use anyhow::{anyhow, Result};
-use log::info;
+use log::{info, trace};
 
 use crate::vulkan_backend::Vulkan;
 
@@ -16,6 +17,9 @@ pub struct App {
     // Window needs to stay after vulkan so that it outlifes destruction of vulkan surface. See
     // Rust drop order.
     window: Option<Window>,
+
+    minimized: bool,
+    resized: bool,
 }
 
 impl ApplicationHandler for App {
@@ -38,17 +42,47 @@ impl ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        info!("App::window_event");
+        trace!("App::window_event");
         match event {
             WindowEvent::CloseRequested => {
                 info!("CloseRequest");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                info!("RedrawRequest");
+                trace!("RedrawRequest");
                 self.render().unwrap();
             }
+            WindowEvent::Resized(size) => {
+                if size.width == 0 || size.height == 0 {
+                    self.minimized = true;
+                } else {
+                    self.resized = true;
+                    self.minimized = false;
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                info!("KeyboardInput");
+                if event.state == ElementState::Pressed {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowRight) => {
+                            self.vulkan.as_mut().unwrap().add_model(1)
+                        }
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => {
+                            self.vulkan.as_mut().unwrap().sub_model(1)
+                        }
+                        _ => (),
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let _ = event_loop;
+        match self.window.as_ref() {
+            Some(window) => window.request_redraw(),
+            None => todo!(),
         }
     }
 }
@@ -59,9 +93,7 @@ impl App {
 
         let event_loop = EventLoop::new()?;
         event_loop.set_control_flow(ControlFlow::Poll);
-        let mut app = App {
-            ..Default::default()
-        };
+        let mut app = App::default();
 
         event_loop.run_app(&mut app)?;
 
@@ -69,7 +101,7 @@ impl App {
     }
 
     fn render(self: &mut Self) -> Result<()> {
-        info!("App::render");
+        trace!("App::render");
         let window = self
             .window
             .as_ref()

@@ -113,3 +113,12 @@ impl App {
         }
     }
 }
+
+impl Drop for App {
+    fn drop(&mut self) {
+        match self.vulkan.as_mut() {
+            Some(vulkan) => vulkan.destroy(),
+            None => (),
+        }
+    }
+}

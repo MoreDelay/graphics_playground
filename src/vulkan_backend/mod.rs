@@ -358,63 +358,65 @@ impl Vulkan {
 
     // Destroys our Vulkan app.
     // Destruction should happen in opposite order than creation.
-    unsafe fn destroy(&mut self) {
-        self.device.device_wait_idle().unwrap();
+    pub fn destroy(&mut self) {
+        unsafe {
+            self.device.device_wait_idle().unwrap();
 
-        self.destroy_swapchain();
+            self.destroy_swapchain();
 
-        self.data
-            .command_pools
-            .iter()
-            .for_each(|p| self.device.destroy_command_pool(*p, None));
+            self.data
+                .command_pools
+                .iter()
+                .for_each(|p| self.device.destroy_command_pool(*p, None));
 
-        self.device.destroy_sampler(self.data.texture_sampler, None);
-        self.device
-            .destroy_image_view(self.data.texture_image_view, None);
-        self.device.destroy_image(self.data.texture_image, None);
-        self.device
-            .free_memory(self.data.texture_image_memory, None);
+            self.device.destroy_sampler(self.data.texture_sampler, None);
+            self.device
+                .destroy_image_view(self.data.texture_image_view, None);
+            self.device.destroy_image(self.data.texture_image, None);
+            self.device
+                .free_memory(self.data.texture_image_memory, None);
 
-        self.device
-            .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
+            self.device
+                .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
 
-        self.device.destroy_buffer(self.data.index_buffer, None);
-        self.device.free_memory(self.data.index_buffer_memory, None);
-        self.device.destroy_buffer(self.data.vertex_buffer, None);
-        self.device
-            .free_memory(self.data.vertex_buffer_memory, None);
+            self.device.destroy_buffer(self.data.index_buffer, None);
+            self.device.free_memory(self.data.index_buffer_memory, None);
+            self.device.destroy_buffer(self.data.vertex_buffer, None);
+            self.device
+                .free_memory(self.data.vertex_buffer_memory, None);
 
-        self.data
-            .in_flight_fences
-            .iter()
-            .for_each(|f| self.device.destroy_fence(*f, None));
+            self.data
+                .in_flight_fences
+                .iter()
+                .for_each(|f| self.device.destroy_fence(*f, None));
 
-        self.data
-            .render_finished_semaphores
-            .iter()
-            .for_each(|s| self.device.destroy_semaphore(*s, None));
-        self.data
-            .image_available_semaphores
-            .iter()
-            .for_each(|s| self.device.destroy_semaphore(*s, None));
+            self.data
+                .render_finished_semaphores
+                .iter()
+                .for_each(|s| self.device.destroy_semaphore(*s, None));
+            self.data
+                .image_available_semaphores
+                .iter()
+                .for_each(|s| self.device.destroy_semaphore(*s, None));
 
-        self.device
-            .destroy_command_pool(self.data.transfer_command_pool, None);
-        self.device
-            .destroy_command_pool(self.data.command_pool, None);
-        self.instance.destroy_surface_khr(self.data.surface, None);
+            self.device
+                .destroy_command_pool(self.data.transfer_command_pool, None);
+            self.device
+                .destroy_command_pool(self.data.command_pool, None);
+            self.instance.destroy_surface_khr(self.data.surface, None);
 
-        // Destroy logical device handler
-        self.device.destroy_device(None);
+            // Destroy logical device handler
+            self.device.destroy_device(None);
 
-        // Destroy callback handler
-        if VALIDATION_ENABLED {
-            self.instance
-                .destroy_debug_utils_messenger_ext(self.data.messenger, None);
+            // Destroy callback handler
+            if VALIDATION_ENABLED {
+                self.instance
+                    .destroy_debug_utils_messenger_ext(self.data.messenger, None);
+            }
+
+            // The Vulkan instance should be destroyed last in the application.
+            self.instance.destroy_instance(None);
         }
-
-        // The Vulkan instance should be destroyed last in the application.
-        self.instance.destroy_instance(None);
     }
 
     unsafe fn destroy_swapchain(&mut self) {

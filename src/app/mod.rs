@@ -70,6 +70,9 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::ArrowLeft) => {
                             self.vulkan.as_mut().unwrap().sub_model(1)
                         }
+                        PhysicalKey::Code(KeyCode::KeyQ) => {
+                            event_loop.exit();
+                        }
                         _ => (),
                     }
                 }

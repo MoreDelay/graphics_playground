@@ -1492,6 +1492,7 @@ unsafe fn create_render_pass(
 
     Ok(())
 }
+
 fn read_shader(filename: &str) -> Vec<u8> {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);

@@ -11,6 +11,7 @@ use nom::combinator::{eof, opt, verify};
 use nom::multi::{fill, many1, many_m_n};
 use nom::number::streaming::float;
 use nom::sequence::{delimited, preceded, separated_pair};
+use nom::Offset;
 use nom::{IResult, Parser};
 use thiserror::Error;
 
@@ -255,21 +256,13 @@ pub fn parse_obj(path: &PathBuf) -> Result<ParsedObj, ParseError> {
                     .map(|v| ObjLine::FaceIndex(v)),
                 obj_ignore.map(|_| ObjLine::Empty),
             ));
-            let (offset, line) = match parser.parse(&buffer) {
-                Ok((input, line)) => {
-                    let offset: usize = unsafe {
-                        input
-                            .as_ptr()
-                            .offset_from(buffer.as_ptr())
-                            .try_into()
-                            .unwrap()
-                    };
-                    (offset, line)
-                }
+            let (rest, line) = match parser.parse(&buffer) {
+                Ok((rest, line)) => (rest, line),
                 Err(nom::Err::Incomplete(_)) => break,
                 Err(_) => return Err(ParseError::WrongFormat),
             };
             drop(parser);
+            let offset = buffer.offset(rest);
             buffer = buffer.split_off(offset);
 
             match line {

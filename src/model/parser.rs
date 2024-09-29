@@ -171,10 +171,10 @@ where
 
         fn checked_index(len: usize) -> impl FnMut(&str) -> IResult<&str, usize> {
             coerce(move |i: &str| -> IResult<&str, usize> {
-                let mut parser = verify(index, |v| *v != 0 && *v as usize <= len);
+                let mut parser = verify(index, |v| *v != 0 && (*v).abs() as usize <= len);
                 let (input, vertex) = parser.parse(i)?;
-                let mag: usize = vertex.abs().try_into().unwrap();
-                let vertex = if vertex < 0 { len - mag } else { mag };
+                let mag = vertex.abs() as usize;
+                let vertex = if vertex < 0 { len - mag + 1 } else { mag };
                 Ok((input, vertex))
             })
         }
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_obj_face_element() {
-        let input = "f 1/1/1   2/2/2   3/3/3 # this is a comment\n";
+        let input = "f -4/1/1   2/-3/2   3/3/-2 # this is a comment\n";
         let (rest, vec) = obj_face_element(4, 4, 4)(input).unwrap();
         let expected = ObjF {
             triplets: vec![

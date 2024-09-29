@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use nom::branch::alt;
@@ -39,9 +38,9 @@ pub struct ObjVn {
 
 #[derive(Debug, PartialEq)]
 pub struct ObjVertexTriplet {
-    vertex: NonZeroUsize,
-    texture: Option<NonZeroUsize>,
-    normal: Option<NonZeroUsize>,
+    vertex: usize,
+    texture: Option<usize>,
+    normal: Option<usize>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -169,18 +168,19 @@ where
             return closure;
         }
 
+        // obj uses 1-based indexing, convert to 0-based
         fn checked_index(len: usize) -> impl FnMut(&str) -> IResult<&str, usize> {
             coerce(move |i: &str| -> IResult<&str, usize> {
                 let mut parser = verify(index, |v| *v != 0 && (*v).abs() as usize <= len);
                 let (input, vertex) = parser.parse(i)?;
                 let mag = vertex.abs() as usize;
-                let vertex = if vertex < 0 { len - mag + 1 } else { mag };
+                let vertex = if vertex < 0 { len - mag } else { mag - 1 };
                 Ok((input, vertex))
             })
         }
 
         let vxx = checked_index(n_vertices).map(|v| ObjVertexTriplet {
-            vertex: v.try_into().unwrap(),
+            vertex: v,
             texture: None,
             normal: None,
         });
@@ -190,8 +190,8 @@ where
             checked_index(n_textures),
         )
         .map(|(v, t)| ObjVertexTriplet {
-            vertex: v.try_into().unwrap(),
-            texture: Some(t.try_into().unwrap()),
+            vertex: v,
+            texture: Some(t),
             normal: None,
         });
 
@@ -201,9 +201,9 @@ where
             checked_index(n_normals),
         )
         .map(|(v, n)| ObjVertexTriplet {
-            vertex: v.try_into().unwrap(),
+            vertex: v,
             texture: None,
-            normal: Some(n.try_into().unwrap()),
+            normal: Some(n),
         });
 
         let vtn = separated_pair(
@@ -216,9 +216,9 @@ where
             ),
         )
         .map(|(v, (t, n))| ObjVertexTriplet {
-            vertex: v.try_into().unwrap(),
-            texture: Some(t.try_into().unwrap()),
-            normal: Some(n.try_into().unwrap()),
+            vertex: v,
+            texture: Some(t),
+            normal: Some(n),
         });
 
         let parse_face = alt((
@@ -350,19 +350,19 @@ mod tests {
         let expected = ObjF {
             triplets: vec![
                 ObjVertexTriplet {
-                    vertex: 1.try_into().unwrap(),
-                    texture: Some(1.try_into().unwrap()),
-                    normal: Some(1.try_into().unwrap()),
+                    vertex: 0,
+                    texture: Some(0),
+                    normal: Some(0),
                 },
                 ObjVertexTriplet {
-                    vertex: 2.try_into().unwrap(),
-                    texture: Some(2.try_into().unwrap()),
-                    normal: Some(2.try_into().unwrap()),
+                    vertex: 1,
+                    texture: Some(1),
+                    normal: Some(1),
                 },
                 ObjVertexTriplet {
-                    vertex: 3.try_into().unwrap(),
-                    texture: Some(3.try_into().unwrap()),
-                    normal: Some(3.try_into().unwrap()),
+                    vertex: 2,
+                    texture: Some(2),
+                    normal: Some(2),
                 },
             ],
         };

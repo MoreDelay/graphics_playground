@@ -16,43 +16,43 @@ use thiserror::Error;
 
 #[derive(Debug, PartialEq)]
 pub struct ObjV {
-    x: f32,
-    y: f32,
-    z: f32,
-    w: f32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct ObjVt {
-    u: f32,
-    v: f32,
-    w: f32,
+    pub u: f32,
+    pub v: f32,
+    pub w: f32,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct ObjVn {
-    i: f32,
-    j: f32,
-    k: f32,
+    pub i: f32,
+    pub j: f32,
+    pub k: f32,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct ObjVertexTriplet {
-    vertex: usize,
-    texture: Option<usize>,
-    normal: Option<usize>,
+    pub vertex: usize,
+    pub texture: Option<usize>,
+    pub normal: Option<usize>,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct ObjF {
-    triplets: Vec<ObjVertexTriplet>,
+    pub triplets: Vec<ObjVertexTriplet>,
 }
 
 pub struct ParsedObj {
-    vertices: Vec<ObjV>,
-    textures: Vec<ObjVt>,
-    normals: Vec<ObjVn>,
-    faces: Vec<ObjF>,
+    pub vertices: Vec<ObjV>,
+    pub textures: Vec<ObjVt>,
+    pub normals: Vec<ObjVn>,
+    pub faces: Vec<ObjF>,
 }
 
 pub enum ObjLine {
@@ -67,8 +67,8 @@ pub enum ObjLine {
 pub enum ParseError {
     #[error("could not read file")]
     IoError(#[from] std::io::Error),
-    #[error("file is ill-formed")]
-    WrongFormat,
+    #[error("file is ill-formed at line {0}")]
+    WrongFormat(usize),
 }
 
 fn end_of_line(input: &str) -> IResult<&str, ()> {
@@ -245,7 +245,9 @@ pub fn parse_obj(path: &PathBuf) -> Result<ParsedObj, ParseError> {
     let mut normals = Vec::new();
     let mut faces = Vec::new();
 
+    let mut line_index = 0;
     while reader.read_line(&mut buffer)? > 0 {
+        line_index += 1;
         loop {
             let mut parser = alt((
                 obj_blank_line.map(|_| ObjLine::Empty),
@@ -259,7 +261,7 @@ pub fn parse_obj(path: &PathBuf) -> Result<ParsedObj, ParseError> {
             let (rest, line) = match parser.parse(&buffer) {
                 Ok((rest, line)) => (rest, line),
                 Err(nom::Err::Incomplete(_)) => break,
-                Err(_) => return Err(ParseError::WrongFormat),
+                Err(_) => return Err(ParseError::WrongFormat(line_index)),
             };
             drop(parser);
             let offset = buffer.offset(rest);

@@ -12,7 +12,7 @@ pub enum MeshError {
     Parsing(#[from] parser::ParseError),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HalfEdgeIndex(usize);
 
 impl std::ops::Index<HalfEdgeIndex> for Vec<HalfEdge> {
@@ -22,7 +22,7 @@ impl std::ops::Index<HalfEdgeIndex> for Vec<HalfEdge> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FaceIndex(usize);
 
 impl std::ops::Index<FaceIndex> for Vec<Face> {
@@ -32,7 +32,7 @@ impl std::ops::Index<FaceIndex> for Vec<Face> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VertexIndex(usize);
 
 impl std::ops::Index<VertexIndex> for Vec<Vertex> {
@@ -146,7 +146,7 @@ impl HalfEdgeMesh {
             let to = halfedges[start_index].vend;
             if let Some(opposite) = helper
                 .iter()
-                .find_map(|&(f, t, h)| (f == from && t == to).then(|| h))
+                .find_map(|&(f, t, h)| (f == to && t == from).then(|| h))
             {
                 halfedges[start_index.0].opposite = Some(opposite);
             }
@@ -182,14 +182,17 @@ mod tests {
         let mut he_index = corner.halfedge.unwrap();
         let start = he_index;
 
-        for _ in 0..4 {
-            let he = ds.halfedges[he_index];
-            he_index = he.next;
+        // cube consists of quads
+        for _ in 0..3 {
+            he_index = ds.halfedges[he_index].next;
+            assert_ne!(start, he_index);
         }
+        he_index = ds.halfedges[he_index].next;
         assert_eq!(start, he_index);
 
         let opp = ds.halfedges[he_index].opposite.unwrap();
         let opp_opp = ds.halfedges[opp].opposite.unwrap();
+        assert_ne!(he_index, opp);
         assert_eq!(he_index, opp_opp);
     }
 }

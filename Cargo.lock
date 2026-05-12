@@ -1090,6 +1090,7 @@ dependencies = [
  "iced_wgpu",
  "iced_widget",
  "iced_winit",
+ "tracing",
  "tracing-subscriber",
 ]
 

@@ -1,22 +1,17 @@
-use std::{
-    collections::HashSet,
-    fs::File,
-    io::{BufRead, BufReader},
-    ops::Range,
-    path::{Path, PathBuf},
-};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
-use nom::{
-    IResult, Offset, Parser,
-    branch::alt,
-    bytes::streaming::{tag, take_until, take_while1},
-    character::streaming::{i32 as parse_i32, line_ending, space1},
-    combinator::opt,
-    multi::{fill, many_m_n, many1, many1_count},
-    number::streaming::float,
-    sequence::{delimited, preceded},
-};
-
+use nom::branch::alt;
+use nom::bytes::streaming::{tag, take_until, take_while1};
+use nom::character::streaming::{i32 as parse_i32, line_ending, space1};
+use nom::combinator::opt;
+use nom::multi::{fill, many_m_n, many1, many1_count};
+use nom::number::streaming::float;
+use nom::sequence::{delimited, preceded};
+use nom::{IResult, Offset, Parser};
 use thiserror::Error;
 
 use super::end_of_line;
@@ -567,10 +562,10 @@ pub fn load_obj(
 
 #[cfg(test)]
 mod tests {
-    use crate::SimpleMtlManager;
     use std::path::PathBuf;
 
     use super::*;
+    use crate::SimpleMtlManager;
 
     #[test]
     fn test_obj_blank_line() {

@@ -1,20 +1,16 @@
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufRead, BufReader},
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 
-use nom::{
-    IResult, Offset, Parser,
-    branch::alt,
-    bytes::streaming::{tag, take_until, take_while1},
-    character::streaming::{line_ending, space1, u32 as parse_u32},
-    combinator::opt,
-    multi::many1,
-    number::streaming::float,
-    sequence::{delimited, preceded},
-};
+use nom::branch::alt;
+use nom::bytes::streaming::{tag, take_until, take_while1};
+use nom::character::streaming::{line_ending, space1, u32 as parse_u32};
+use nom::combinator::opt;
+use nom::multi::many1;
+use nom::number::streaming::float;
+use nom::sequence::{delimited, preceded};
+use nom::{IResult, Offset, Parser};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Color {

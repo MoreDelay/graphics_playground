@@ -6,10 +6,10 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat) -> Scene {
+    pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat) -> Self {
         let pipeline = build_pipeline(device, texture_format);
 
-        Scene { pipeline }
+        Self { pipeline }
     }
 
     pub fn clear<'a>(
@@ -17,6 +17,14 @@ impl Scene {
         encoder: &'a mut wgpu::CommandEncoder,
         background_color: Color,
     ) -> wgpu::RenderPass<'a> {
+        let [r, g, b, a] = background_color.into_linear();
+        let background_color = wgpu::Color {
+            r: r as f64,
+            g: g as f64,
+            b: b as f64,
+            a: a as f64,
+        };
+
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -24,16 +32,7 @@ impl Scene {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear({
-                        let [r, g, b, a] = background_color.into_linear();
-
-                        wgpu::Color {
-                            r: r as f64,
-                            g: g as f64,
-                            b: b as f64,
-                            a: a as f64,
-                        }
-                    }),
+                    load: wgpu::LoadOp::Clear(background_color),
                     store: wgpu::StoreOp::Store,
                 },
             })],

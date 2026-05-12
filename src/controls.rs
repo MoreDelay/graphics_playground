@@ -14,14 +14,14 @@ pub enum Message {
 }
 
 impl Controls {
-    pub fn new() -> Controls {
-        Controls {
+    pub fn new() -> Self {
+        Self {
             background_color: Color::BLACK,
             input: String::default(),
         }
     }
 
-    pub fn background_color(&self) -> Color {
+    pub const fn background_color(&self) -> Color {
         self.background_color
     }
 }
@@ -39,28 +39,19 @@ impl Controls {
     }
 
     pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
-        let background_color = self.background_color;
+        let bg = self.background_color;
 
         let sliders = row![
-            slider(0.0..=1.0, background_color.r, move |r| {
-                Message::BackgroundColorChanged(Color {
-                    r,
-                    ..background_color
-                })
+            slider(0.0..=1.0, bg.r, move |r| {
+                Message::BackgroundColorChanged(Color { r, ..bg })
             })
             .step(0.01),
-            slider(0.0..=1.0, background_color.g, move |g| {
-                Message::BackgroundColorChanged(Color {
-                    g,
-                    ..background_color
-                })
+            slider(0.0..=1.0, bg.g, move |g| {
+                Message::BackgroundColorChanged(Color { g, ..bg })
             })
             .step(0.01),
-            slider(0.0..=1.0, background_color.b, move |b| {
-                Message::BackgroundColorChanged(Color {
-                    b,
-                    ..background_color
-                })
+            slider(0.0..=1.0, bg.b, move |b| {
+                Message::BackgroundColorChanged(Color { b, ..bg })
             })
             .step(0.01),
         ]
@@ -70,7 +61,7 @@ impl Controls {
         bottom(
             column![
                 text("Background color").color(Color::WHITE),
-                text!("{background_color:?}").size(14).color(Color::WHITE),
+                text!("{bg:?}").size(14).color(Color::WHITE),
                 sliders,
                 text_input("Type something...", &self.input).on_input(Message::InputChanged),
             ]

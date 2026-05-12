@@ -1,7 +1,6 @@
 use iced_wgpu::Renderer;
-use iced_widget::{column, container, row, slider, text, text_input};
-use iced_winit::core::{Color, Element, Length::*, Theme};
-use iced_winit::runtime::{Program, Task};
+use iced_widget::{bottom, column, row, slider, text, text_input};
+use iced_winit::core::{Color, Element, Theme};
 
 pub struct Controls {
     background_color: Color,
@@ -27,12 +26,8 @@ impl Controls {
     }
 }
 
-impl Program for Controls {
-    type Theme = Theme;
-    type Message = Message;
-    type Renderer = Renderer;
-
-    fn update(&mut self, message: Message) -> Task<Message> {
+impl Controls {
+    pub fn update(&mut self, message: Message) {
         match message {
             Message::BackgroundColorChanged(color) => {
                 self.background_color = color;
@@ -41,11 +36,9 @@ impl Program for Controls {
                 self.input = input;
             }
         }
-
-        Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message, Theme, Renderer> {
+    pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
         let background_color = self.background_color;
 
         let sliders = row![
@@ -74,17 +67,16 @@ impl Program for Controls {
         .width(500)
         .spacing(20);
 
-        container(
+        bottom(
             column![
                 text("Background color").color(Color::WHITE),
                 text!("{background_color:?}").size(14).color(Color::WHITE),
-                text_input("Placeholder", &self.input).on_input(Message::InputChanged),
                 sliders,
+                text_input("Type something...", &self.input).on_input(Message::InputChanged),
             ]
             .spacing(10),
         )
         .padding(10)
-        .align_bottom(Fill)
         .into()
     }
 }

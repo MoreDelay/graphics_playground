@@ -67,6 +67,9 @@ impl winit::application::ApplicationHandler for Runner {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        use winit::event::KeyEvent;
+        use winit::keyboard::{KeyCode, PhysicalKey};
+
         let Self::Ready(ready) = self else {
             return;
         };
@@ -75,9 +78,18 @@ impl winit::application::ApplicationHandler for Runner {
         match event {
             WindowEvent::RedrawRequested => ready.redraw(),
             WindowEvent::CursorMoved { position, .. } => ready.cursor_moved(position),
-            WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changes(modifiers),
+            WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changed(modifiers),
             WindowEvent::Resized(_) => ready.resized(),
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::KeyboardInput { ref event, .. } => {
+                let KeyEvent { physical_key, .. } = event;
+                match physical_key {
+                    PhysicalKey::Code(KeyCode::KeyQ) if ready.modifiers.control_key() => {
+                        event_loop.exit();
+                    }
+                    _ => (),
+                }
+            }
             _ => {}
         }
 
@@ -334,7 +346,7 @@ impl Ready {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 width,
                 height,
-                present_mode: wgpu::PresentMode::AutoVsync,
+                present_mode: wgpu::PresentMode::AutoNoVsync,
                 alpha_mode: wgpu::CompositeAlphaMode::Auto,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
@@ -349,7 +361,7 @@ impl Ready {
         ));
     }
 
-    fn modifiers_changes(&mut self, modifiers: Modifiers) {
+    fn modifiers_changed(&mut self, modifiers: Modifiers) {
         self.modifiers = modifiers.state();
     }
 

@@ -1,5 +1,55 @@
-use iced_wgpu::wgpu;
-use iced_winit::core::Color;
+use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
+use iced_wgpu::{Renderer, wgpu};
+use iced_winit::core::{Color, Element, Theme};
+
+use crate::controls::Message;
+
+pub struct SceneWidget;
+
+impl SceneWidget {
+    pub fn new() -> Element<'static, Message, Theme, Renderer> {
+        Element::new(Self)
+    }
+}
+
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for SceneWidget
+where
+    Renderer: renderer::Renderer,
+{
+    fn size(&self) -> iced::Size<iced::Length> {
+        iced::Size::new(iced::Length::Fill, iced::Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut widget::Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::Node::new(limits.max())
+    }
+
+    fn draw(
+        &self,
+        _tree: &widget::Tree,
+        renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &iced::Rectangle,
+    ) {
+        let bounds = layout.bounds();
+
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                ..Default::default()
+            },
+            iced::Color::from_rgb(1., 0., 0.),
+        );
+    }
+}
 
 pub struct Scene {
     pipeline: wgpu::RenderPipeline,

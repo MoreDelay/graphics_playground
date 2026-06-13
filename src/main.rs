@@ -6,6 +6,7 @@ use std::sync::Arc;
 use controls::Controls;
 use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
+use iced_widget::{column, row};
 use iced_winit::core::time::Instant;
 use iced_winit::core::{Event, Font, Pixels, Size, Theme, mouse, renderer, window};
 use iced_winit::runtime::user_interface::{self, UserInterface};
@@ -267,21 +268,21 @@ impl Ready {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-        {
-            // Clear the frame
-            let mut render_pass =
-                Scene::clear(&view, &mut encoder, self.controls.background_color());
-
-            // Draw the scene
-            self.scene.draw(&mut render_pass);
-        }
-
-        // Submit the scene
-        self.queue.submit([encoder.finish()]);
+        // let mut encoder = self
+        //     .device
+        //     .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        //
+        // {
+        //     // Clear the frame
+        //     let mut render_pass =
+        //         Scene::clear(&view, &mut encoder, self.controls.background_color());
+        //
+        //     // Draw the scene
+        //     self.scene.draw(&mut render_pass);
+        // }
+        //
+        // // Submit the scene
+        // self.queue.submit([encoder.finish()]);
 
         // Draw iced on top
         let mut interface = UserInterface::build(
@@ -324,8 +325,18 @@ impl Ready {
         );
         self.cache = interface.into_cache();
 
-        self.renderer
-            .present(None, frame.texture.format(), &view, &self.viewport);
+        let bg_color = iced::Color {
+            r: (3. / 255.0),
+            g: (46. / 255.0),
+            b: (99. / 255.0),
+            a: 1.,
+        };
+        self.renderer.present(
+            Some(bg_color),
+            frame.texture.format(),
+            &view,
+            &self.viewport,
+        );
 
         // Present the frame
         frame.present();

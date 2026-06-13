@@ -3,17 +3,33 @@ name = "graphics-playground"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+resolver = "3"
+members = ["parsers"]
+
 [dependencies]
-iced = "0.14.0"
+iced = {
+  version = "0.14.0",
+  # We need to disable web-colors because that breaks iced::Color interpretation, which should
+  # be sRBG but is used linearly due to that feature.
+  default-features = false,
+  features = [
+    "advanced",
+    "crisp",
+    "linux-theme-detection",
+    "thread-pool",
+    "tiny-skia",
+    "wayland",
+    "wgpu",
+    "x11",
+  ]
+}
+iced_graphics = { version = "0.14.0" }
 iced_wgpu = "0.14.0"
 iced_widget = { version = "0.14.0", features = ["wgpu"] }
 iced_winit = "0.14.0"
 tracing = "0.1"
 tracing-subscriber = "0.3.20"
-
-[workspace]
-resolver = "3"
-members = ["parsers"]
 
 [lints.clippy]
 nursery = { level = "warn", priority = -1 }
@@ -37,7 +53,7 @@ missing_assert_message = "warn"
 missing_asserts_for_indexing = "warn"
 # missing_docs_in_private_items = "warn"
 mixed_read_write_in_expression = "warn"
-mod_module_files = "warn" # alternative: self_names_module_files
+mod_module_files = "warn"  # alternative: self_names_module_files
 needless_raw_strings = "warn"
 pathbuf_init_then_push = "warn"
 redundant_test_prefix = "warn"

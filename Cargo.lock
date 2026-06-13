@@ -1087,6 +1087,7 @@ name = "graphics-playground"
 version = "0.1.0"
 dependencies = [
  "iced",
+ "iced_graphics",
  "iced_wgpu",
  "iced_widget",
  "iced_winit",

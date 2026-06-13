@@ -19,6 +19,8 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
 
+use crate::scene::SceneWidget;
+
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
 
@@ -105,7 +107,7 @@ impl winit::application::ApplicationHandler for Runner {
         if !ready.events.is_empty() {
             // We process them
             let mut interface = UserInterface::build(
-                ready.controls.view(),
+                ready.controls.view(ready.scene.widget()),
                 ready.viewport.logical_size(),
                 std::mem::take(&mut ready.cache),
                 &mut ready.renderer,
@@ -268,25 +270,9 @@ impl Ready {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // let mut encoder = self
-        //     .device
-        //     .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        //
-        // {
-        //     // Clear the frame
-        //     let mut render_pass =
-        //         Scene::clear(&view, &mut encoder, self.controls.background_color());
-        //
-        //     // Draw the scene
-        //     self.scene.draw(&mut render_pass);
-        // }
-        //
-        // // Submit the scene
-        // self.queue.submit([encoder.finish()]);
-
         // Draw iced on top
         let mut interface = UserInterface::build(
-            self.controls.view(),
+            self.controls.view(self.scene.widget()),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
             &mut self.renderer,
@@ -337,6 +323,24 @@ impl Ready {
             &view,
             &self.viewport,
         );
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        {
+            // Clear the frame
+            if let Some(mut render_pass) =
+                self.scene
+                    .clear(&view, &mut encoder, self.controls.background_color())
+            {
+                // Draw the scene
+                self.scene.draw(&mut render_pass);
+            }
+        }
+
+        // Submit the scene
+        self.queue.submit([encoder.finish()]);
 
         // Present the frame
         frame.present();

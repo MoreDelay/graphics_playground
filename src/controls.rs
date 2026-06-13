@@ -40,7 +40,7 @@ impl Controls {
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
+    pub fn view(&self, scene: SceneWidget) -> Element<'_, Message, Theme, Renderer> {
         // let bg = self.background_color;
         //
         // let sliders = row![
@@ -74,7 +74,7 @@ impl Controls {
 
         row![
             column![text("Hello World").color(Color::WHITE), button("a button")].width(200),
-            SceneWidget::new()
+            scene.view()
         ]
         .into()
     }

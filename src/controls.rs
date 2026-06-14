@@ -1,46 +1,38 @@
+use iced::wgpu;
 use iced_wgpu::Renderer;
-use iced_widget::{bottom, button, column, row, slider, text, text_input};
+use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 
-use crate::scene::SceneWidget;
+use crate::scene::Scene;
 
 pub struct Controls {
-    background_color: Color,
-    input: String,
+    scene: Scene,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    BackgroundColorChanged(Color),
-    InputChanged(String),
+    // BackgroundColorChanged(Color),
+    // InputChanged(String),
 }
 
 impl Controls {
-    pub fn new() -> Self {
-        Self {
-            background_color: Color::BLACK,
-            input: String::default(),
-        }
+    pub const fn new(scene: Scene) -> Self {
+        Self { scene }
     }
 
-    pub const fn background_color(&self) -> Color {
-        self.background_color
-    }
-}
-
-impl Controls {
-    pub fn update(&mut self, message: Message) {
-        match message {
-            Message::BackgroundColorChanged(color) => {
-                self.background_color = color;
-            }
-            Message::InputChanged(input) => {
-                self.input = input;
-            }
-        }
+    #[expect(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
+    pub const fn update(&mut self, _message: Message) {
+        // match message {
+        //     Message::BackgroundColorChanged(color) => {
+        //         self.background_color = color;
+        //     }
+        //     Message::InputChanged(input) => {
+        //         self.input = input;
+        //     }
+        // }
     }
 
-    pub fn view(&self, scene: SceneWidget) -> Element<'_, Message, Theme, Renderer> {
+    pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
         // let bg = self.background_color;
         //
         // let sliders = row![
@@ -74,8 +66,14 @@ impl Controls {
 
         row![
             column![text("Hello World").color(Color::WHITE), button("a button")].width(200),
-            scene.view()
+            self.scene.view()
         ]
         .into()
+    }
+
+    pub fn draw_wgpu(&self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(mut render_pass) = self.scene.start_render_pass(view, encoder) {
+            self.scene.draw(&mut render_pass);
+        }
     }
 }

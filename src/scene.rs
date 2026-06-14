@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::cell::Cell;
 
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::{Renderer, wgpu};
@@ -7,21 +7,12 @@ use iced_winit::core::{Color, Element, Theme};
 use crate::controls::Message;
 
 #[derive(Debug, Clone)]
-pub struct SceneWidget {
-    bounds: Arc<Mutex<Option<iced::Rectangle>>>,
+pub struct SceneWidget<'a> {
+    bounds: &'a Cell<Option<iced::Rectangle>>,
+    bg: Color,
 }
 
-impl SceneWidget {
-    pub fn new(bounds: Arc<Mutex<Option<iced::Rectangle>>>) -> Self {
-        Self { bounds }
-    }
-
-    pub fn view(self) -> Element<'static, Message, Theme, Renderer> {
-        Element::new(self)
-    }
-}
-
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for SceneWidget
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for SceneWidget<'_>
 where
     Renderer: renderer::Renderer,
 {
@@ -49,42 +40,49 @@ where
         _viewport: &iced::Rectangle,
     ) {
         let bounds = layout.bounds();
-        *self.bounds.lock().expect("poisoned mutex") = Some(layout.bounds());
+        self.bounds.replace(Some(bounds));
 
-        // renderer.fill_quad(
-        //     renderer::Quad {
-        //         bounds,
-        //         ..Default::default()
-        //     },
-        //     iced::Color::from_rgb(1., 0., 0.),
-        // );
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                ..Default::default()
+            },
+            self.bg,
+        );
     }
 }
 
 pub struct Scene {
-    bounds: Arc<Mutex<Option<iced::Rectangle>>>,
+    bounds: Cell<Option<iced::Rectangle>>,
     pipeline: wgpu::RenderPipeline,
+    background_color: Color,
 }
 
 impl Scene {
     pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat) -> Self {
-        let bounds = Arc::new(Mutex::new(None));
+        let bounds = Cell::new(None);
         let pipeline = build_pipeline(device, texture_format);
-        Self { bounds, pipeline }
+        let background_color = Color::BLACK;
+        Self {
+            bounds,
+            pipeline,
+            background_color,
+        }
     }
 
-    pub fn widget(&self) -> SceneWidget {
-        let bounds = Arc::clone(&self.bounds);
-        SceneWidget { bounds }
+    pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
+        let bounds = &self.bounds;
+        let bg = self.background_color;
+        let widget = SceneWidget { bounds, bg };
+        Element::new(widget)
     }
 
-    pub fn clear<'a>(
+    pub fn start_render_pass<'a>(
         &self,
         target: &'a wgpu::TextureView,
         encoder: &'a mut wgpu::CommandEncoder,
-        _background_color: Color,
     ) -> Option<wgpu::RenderPass<'a>> {
-        let bounds = self.bounds.lock().expect("poisoned mutex").take()?;
+        let bounds = self.bounds.take()?;
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -109,17 +107,6 @@ impl Scene {
             bounds.width as u32,
             bounds.height as u32,
         );
-
-        // // TODO: make a simple draw call over whole area to clear the area with our own
-        // background color
-        //
-        // let [r, g, b, a] = _background_color.into_linear();
-        // let background_color = wgpu::Color {
-        //     r: r as f64,
-        //     g: g as f64,
-        //     b: b as f64,
-        //     a: a as f64,
-        // };
 
         Some(render_pass)
     }

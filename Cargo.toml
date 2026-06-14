@@ -38,6 +38,7 @@ pedantic = { level = "warn", priority = -1 }
 # disable some pedantic lints
 cast_lossless = "allow"
 cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
 enum_glob_use = "allow"
 match_bool = "allow"
 match_same_arms = "allow"

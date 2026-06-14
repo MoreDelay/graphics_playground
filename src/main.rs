@@ -6,7 +6,6 @@ use std::sync::Arc;
 use controls::Controls;
 use iced_wgpu::graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
-use iced_widget::{column, row};
 use iced_winit::core::time::Instant;
 use iced_winit::core::{Event, Font, Pixels, Size, Theme, mouse, renderer, window};
 use iced_winit::runtime::user_interface::{self, UserInterface};
@@ -18,8 +17,6 @@ use tracing::warn;
 use winit::event::WindowEvent;
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
-
-use crate::scene::SceneWidget;
 
 pub fn main() -> Result<(), winit::error::EventLoopError> {
     tracing_subscriber::fmt::init();
@@ -38,7 +35,6 @@ struct Ready {
     surface: wgpu::Surface<'static>,
     format: wgpu::TextureFormat,
     renderer: Renderer,
-    scene: Scene,
     controls: Controls,
     events: Vec<Event>,
     cursor: mouse::Cursor,
@@ -107,7 +103,7 @@ impl winit::application::ApplicationHandler for Runner {
         if !ready.events.is_empty() {
             // We process them
             let mut interface = UserInterface::build(
-                ready.controls.view(ready.scene.widget()),
+                ready.controls.view(),
                 ready.viewport.logical_size(),
                 std::mem::take(&mut ready.cache),
                 &mut ready.renderer,
@@ -209,7 +205,7 @@ impl Ready {
 
         // Initialize scene and GUI controls
         let scene = Scene::new(&device, format);
-        let controls = Controls::new();
+        let controls = Controls::new(scene);
 
         // Initialize iced
 
@@ -233,7 +229,6 @@ impl Ready {
             renderer,
             surface,
             format,
-            scene,
             controls,
             events: Vec::new(),
             cursor: mouse::Cursor::Unavailable,
@@ -270,9 +265,9 @@ impl Ready {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Draw iced on top
+        // Draw iced first
         let mut interface = UserInterface::build(
-            self.controls.view(self.scene.widget()),
+            self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
             &mut self.renderer,
@@ -324,20 +319,12 @@ impl Ready {
             &self.viewport,
         );
 
+        // Draw the scene with wgpu now.
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        {
-            // Clear the frame
-            if let Some(mut render_pass) =
-                self.scene
-                    .clear(&view, &mut encoder, self.controls.background_color())
-            {
-                // Draw the scene
-                self.scene.draw(&mut render_pass);
-            }
-        }
+        self.controls.draw_wgpu(&view, &mut encoder);
 
         // Submit the scene
         self.queue.submit([encoder.finish()]);

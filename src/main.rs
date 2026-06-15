@@ -135,19 +135,12 @@ impl winit::application::ApplicationHandler for Runner {
 
 impl Ready {
     fn new(event_loop: &winit::event_loop::ActiveEventLoop) -> Self {
-        let window = Arc::new(
-            event_loop
-                .create_window(winit::window::WindowAttributes::default())
-                .expect("Create window"),
-        );
+        // Initialize window with winit
+        let mut window = winit::window::WindowAttributes::default();
+        window.min_inner_size = Some(Controls::min_window_size().into());
+        let window = Arc::new(event_loop.create_window(window).expect("Create window"));
 
-        let physical_size = window.inner_size();
-        let viewport = Viewport::with_physical_size(
-            Size::new(physical_size.width, physical_size.height),
-            window.scale_factor() as f32,
-        );
-        let clipboard = Clipboard::connect(Arc::clone(&window));
-
+        // Initialize wgpu
         let backends = wgpu::Backends::from_env().unwrap_or_default();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
@@ -189,6 +182,7 @@ impl Ready {
             (format, adapter, device, queue)
         });
 
+        let physical_size = window.inner_size();
         surface.configure(
             &device,
             &wgpu::SurfaceConfiguration {
@@ -208,6 +202,11 @@ impl Ready {
         let controls = Controls::new(scene);
 
         // Initialize iced
+        let viewport = Viewport::with_physical_size(
+            Size::new(physical_size.width, physical_size.height),
+            window.scale_factor() as f32,
+        );
+        let clipboard = Clipboard::connect(Arc::clone(&window));
 
         let engine = Engine::new(
             &adapter,

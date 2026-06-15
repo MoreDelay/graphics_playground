@@ -8,6 +8,7 @@ resolver = "3"
 members = ["parsers"]
 
 [dependencies]
+bytemuck = "1.25.0"
 iced = {
   version = "0.14.0",
   # We need to disable web-colors because that breaks iced::Color interpretation, which should
@@ -28,8 +29,10 @@ iced_graphics = { version = "0.14.0" }
 iced_wgpu = "0.14.0"
 iced_widget = { version = "0.14.0", features = ["wgpu"] }
 iced_winit = "0.14.0"
-tracing = "0.1"
+image = "0.25.10"
+tracing = "0.1.44"
 tracing-subscriber = "0.3.20"
+# wesl = "0.4.0"
 
 [lints.clippy]
 nursery = { level = "warn", priority = -1 }
@@ -38,6 +41,7 @@ pedantic = { level = "warn", priority = -1 }
 # disable some pedantic lints
 cast_lossless = "allow"
 cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
 cast_sign_loss = "allow"
 enum_glob_use = "allow"
 match_bool = "allow"

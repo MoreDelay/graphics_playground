@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::path::Path;
 
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::{Renderer, wgpu};
@@ -6,13 +7,21 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit;
 
+use crate::image::{ImageLoaded, ImageRenderState};
 use crate::scene::Scene;
+use crate::{GpuContext, TargetContext};
 
 pub struct Controls {
     // Bounds in a cell so that we can update its value with the computed layout from iced by
     // passing a reference to the widget's draw call.
     scene_bounds: Cell<Option<iced::Rectangle>>,
-    scene: Scene,
+    scene: CurrentScene,
+}
+
+#[expect(clippy::large_enum_variant)]
+enum CurrentScene {
+    Scene(Scene),
+    Image(ImageRenderState),
 }
 
 #[derive(Debug, Clone)]
@@ -24,10 +33,26 @@ pub enum Message {
 impl Controls {
     pub const fn new(scene: Scene) -> Self {
         let scene_bounds = Cell::new(None);
+        let scene = CurrentScene::Scene(scene);
         Self {
             scene_bounds,
             scene,
         }
+    }
+
+    pub fn image(
+        path: &Path,
+        ctx: &GpuContext,
+        target: &TargetContext,
+    ) -> Result<Self, image::ImageError> {
+        let scene_bounds = Cell::new(None);
+        let image = ImageLoaded::load(path, wgpu::TextureFormat::Rgba8UnormSrgb)?;
+        let state = ImageRenderState::new(image, ctx, target);
+        let scene = CurrentScene::Image(state);
+        Ok(Self {
+            scene_bounds,
+            scene,
+        })
     }
 
     #[expect(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
@@ -47,8 +72,12 @@ impl Controls {
 
         self.scene_bounds.set(None);
 
+        let bg_color = match &self.scene {
+            CurrentScene::Scene(scene) => scene.bg_color(),
+            CurrentScene::Image(_image) => Color::BLACK,
+        };
+
         let bounds = &self.scene_bounds;
-        let bg_color = self.scene.bg_color();
         let placeholder = PlaceholderWidget { bounds, bg_color };
         let scene = Element::new(placeholder);
 
@@ -72,8 +101,13 @@ impl Controls {
     }
 
     pub fn draw_wgpu(&self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(mut render_pass) = self.start_render_pass(view, encoder) {
-            self.scene.draw(&mut render_pass);
+        let Some(mut render_pass) = self.start_render_pass(view, encoder) else {
+            return;
+        };
+
+        match &self.scene {
+            CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
+            CurrentScene::Image(image) => image.draw(&mut render_pass),
         }
     }
 

@@ -1,6 +1,8 @@
 mod controls;
+mod image;
 mod scene;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use controls::Controls;
@@ -28,12 +30,21 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
     event_loop.run_app(&mut runner)
 }
 
+struct GpuContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+struct TargetContext {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    size: winit::dpi::PhysicalSize<u32>,
+}
+
 struct Ready {
     window: Arc<winit::window::Window>,
-    queue: wgpu::Queue,
-    device: wgpu::Device,
-    surface: wgpu::Surface<'static>,
-    format: wgpu::TextureFormat,
+    gpu_ctx: GpuContext,
+    target_ctx: TargetContext,
     renderer: Renderer,
     controls: Controls,
     events: Vec<Event>,
@@ -183,23 +194,30 @@ impl Ready {
         });
 
         let physical_size = window.inner_size();
-        surface.configure(
-            &device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format,
-                width: physical_size.width,
-                height: physical_size.height,
-                present_mode: wgpu::PresentMode::AutoVsync,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            },
-        );
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: physical_size.width,
+            height: physical_size.height,
+            present_mode: wgpu::PresentMode::AutoNoVsync,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &surface_config);
+
+        let gpu_ctx = GpuContext { device, queue };
+        let target_ctx = TargetContext {
+            surface,
+            config: surface_config,
+            size: physical_size,
+        };
 
         // Initialize scene and GUI controls
-        let scene = Scene::new(&device, format);
-        let controls = Controls::new(scene);
+        // let scene = Scene::new(&device, format);
+        // let controls = Controls::new(scene);
+        let path = Path::new("image/test.jpg");
+        let controls = Controls::image(path, &gpu_ctx, &target_ctx).expect("works");
 
         // Initialize iced
         let viewport = Viewport::with_physical_size(
@@ -210,8 +228,8 @@ impl Ready {
 
         let engine = Engine::new(
             &adapter,
-            device.clone(),
-            queue.clone(),
+            gpu_ctx.device.clone(),
+            gpu_ctx.queue.clone(),
             format,
             None,
             Shell::headless(),
@@ -220,14 +238,11 @@ impl Ready {
 
         // You should change this if you want to render continuously
         event_loop.set_control_flow(ControlFlow::Wait);
-
         Self {
             window,
-            device,
-            queue,
+            gpu_ctx,
+            target_ctx,
             renderer,
-            surface,
-            format,
             controls,
             events: Vec::new(),
             cursor: mouse::Cursor::Unavailable,
@@ -245,7 +260,7 @@ impl Ready {
             self.resized = false;
         }
 
-        let frame = match self.surface.get_current_texture() {
+        let frame = match self.target_ctx.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(error) => {
                 assert!(
@@ -320,13 +335,14 @@ impl Ready {
 
         // Draw the scene with wgpu now.
         let mut encoder = self
+            .gpu_ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         self.controls.draw_wgpu(&view, &mut encoder);
 
         // Submit the scene
-        self.queue.submit([encoder.finish()]);
+        self.gpu_ctx.queue.submit([encoder.finish()]);
 
         // Present the frame
         frame.present();
@@ -334,25 +350,17 @@ impl Ready {
 
     fn do_resize(&mut self) {
         let winit::dpi::PhysicalSize { width, height } = self.window.inner_size();
+        self.target_ctx.config.width = width;
+        self.target_ctx.config.height = height;
 
         self.viewport = Viewport::with_physical_size(
             Size::new(width, height),
             self.window.scale_factor() as f32,
         );
 
-        self.surface.configure(
-            &self.device,
-            &wgpu::SurfaceConfiguration {
-                format: self.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                width,
-                height,
-                present_mode: wgpu::PresentMode::AutoNoVsync,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            },
-        );
+        self.target_ctx
+            .surface
+            .configure(&self.gpu_ctx.device, &self.target_ctx.config);
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {

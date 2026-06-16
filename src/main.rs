@@ -101,9 +101,9 @@ impl winit::application::ApplicationHandler for Runner {
         }
 
         // Map window event to iced event
-        if let Some(event) =
-            conversion::window_event(event, ready.window.scale_factor() as f32, ready.modifiers)
-        {
+        #[expect(clippy::cast_possible_truncation)]
+        let scale_factor = ready.window.scale_factor() as f32;
+        if let Some(event) = conversion::window_event(event, scale_factor, ready.modifiers) {
             ready.events.push(event);
         }
 
@@ -166,13 +166,14 @@ impl Ready {
                     .await
                     .expect("Create adapter");
 
-            let adapter_features = adapter.features();
-            let capabilities = surface.get_capabilities(&adapter);
+            let required_features = adapter.features() & wgpu::Features::default();
+            let required_features =
+                required_features | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER;
 
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: adapter_features & wgpu::Features::default(),
+                    required_features,
                     required_limits: wgpu::Limits::default(),
                     memory_hints: wgpu::MemoryHints::MemoryUsage,
                     trace: wgpu::Trace::Off,
@@ -181,6 +182,7 @@ impl Ready {
                 .await
                 .expect("Request device");
 
+            let capabilities = surface.get_capabilities(&adapter);
             let format = capabilities
                 .formats
                 .iter()
@@ -215,9 +217,11 @@ impl Ready {
         let controls = Controls::new(&gpu_ctx, &target_ctx);
 
         // Initialize iced
+        #[expect(clippy::cast_possible_truncation)]
+        let scale_factor = window.scale_factor() as f32;
         let viewport = Viewport::with_physical_size(
             Size::new(physical_size.width, physical_size.height),
-            window.scale_factor() as f32,
+            scale_factor,
         );
         let clipboard = Clipboard::connect(Arc::clone(&window));
 
@@ -348,10 +352,9 @@ impl Ready {
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
 
-        self.viewport = Viewport::with_physical_size(
-            Size::new(width, height),
-            self.window.scale_factor() as f32,
-        );
+        #[expect(clippy::cast_possible_truncation)]
+        let scale_factor = self.window.scale_factor() as f32;
+        self.viewport = Viewport::with_physical_size(Size::new(width, height), scale_factor);
 
         self.target_ctx
             .surface

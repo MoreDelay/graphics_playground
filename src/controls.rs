@@ -117,12 +117,13 @@ impl Controls {
 
         // limit rendering to the scene bounds
         render_pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
-        render_pass.set_scissor_rect(
-            bounds.x as u32,
-            bounds.y as u32,
-            bounds.width as u32,
-            bounds.height as u32,
-        );
+        // #[expect(clippy::cast_possible_truncation)]
+        // render_pass.set_scissor_rect(
+        //     bounds.x.floor() as u32,
+        //     bounds.y.floor() as u32,
+        //     bounds.width.ceil() as u32,
+        //     bounds.height.ceil() as u32,
+        // );
 
         Some(render_pass)
     }

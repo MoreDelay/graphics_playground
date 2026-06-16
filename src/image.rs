@@ -151,6 +151,8 @@ impl ImageLoaded {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("texture sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToBorder,
+            address_mode_v: wgpu::AddressMode::ClampToBorder,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
@@ -218,6 +220,7 @@ impl ImageMetadataBinding {
         ctx: &GpuContext,
         layout: &ImageMetadataBindGroupLayout,
     ) -> Self {
+        #[expect(clippy::cast_precision_loss)]
         let data = ImageMetadataRaw {
             size: [image.width() as f32, image.height() as f32],
             start: [0., 0.],
@@ -347,10 +350,7 @@ impl ImagePipeline {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target.config.format,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent::REPLACE,
-                            alpha: wgpu::BlendComponent::REPLACE,
-                        }),
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),

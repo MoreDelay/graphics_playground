@@ -2,7 +2,6 @@ mod controls;
 mod image;
 mod scene;
 
-use std::path::Path;
 use std::sync::Arc;
 
 use controls::Controls;
@@ -14,7 +13,6 @@ use iced_winit::runtime::user_interface::{self, UserInterface};
 use iced_winit::winit::dpi::PhysicalPosition;
 use iced_winit::winit::event::Modifiers;
 use iced_winit::{Clipboard, conversion, futures, winit};
-use scene::Scene;
 use tracing::warn;
 use winit::event::WindowEvent;
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -38,7 +36,6 @@ struct GpuContext {
 struct TargetContext {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
 }
 
 struct Ready {
@@ -135,7 +132,9 @@ impl winit::application::ApplicationHandler for Runner {
 
             // update our UI with any messages
             for message in messages {
-                ready.controls.update(message);
+                ready
+                    .controls
+                    .update(message, &ready.gpu_ctx, &ready.target_ctx);
             }
 
             // and request a redraw
@@ -210,14 +209,10 @@ impl Ready {
         let target_ctx = TargetContext {
             surface,
             config: surface_config,
-            size: physical_size,
         };
 
         // Initialize scene and GUI controls
-        // let scene = Scene::new(&device, format);
-        // let controls = Controls::new(scene);
-        let path = Path::new("image/test.jpg");
-        let controls = Controls::image(path, &gpu_ctx, &target_ctx).expect("works");
+        let controls = Controls::new(&gpu_ctx, &target_ctx);
 
         // Initialize iced
         let viewport = Viewport::with_physical_size(

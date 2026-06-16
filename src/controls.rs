@@ -18,53 +18,32 @@ pub struct Controls {
     scene: CurrentScene,
 }
 
-#[expect(clippy::large_enum_variant)]
-enum CurrentScene {
-    Scene(Scene),
-    Image(ImageRenderState),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Message {
-    // BackgroundColorChanged(Color),
-    // InputChanged(String),
+    SwitchScene,
 }
 
 impl Controls {
-    pub const fn new(scene: Scene) -> Self {
+    pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let scene_bounds = Cell::new(None);
-        let scene = CurrentScene::Scene(scene);
+        let scene = CurrentScene::scene(ctx, target);
         Self {
             scene_bounds,
             scene,
         }
     }
 
-    pub fn image(
-        path: &Path,
-        ctx: &GpuContext,
-        target: &TargetContext,
-    ) -> Result<Self, image::ImageError> {
-        let scene_bounds = Cell::new(None);
-        let image = ImageLoaded::load(path, wgpu::TextureFormat::Rgba8UnormSrgb)?;
-        let state = ImageRenderState::new(image, ctx, target);
-        let scene = CurrentScene::Image(state);
-        Ok(Self {
-            scene_bounds,
-            scene,
-        })
-    }
-
-    #[expect(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
-    pub const fn update(&mut self, _message: Message) {
-        // match message {
-        //     Message::BackgroundColorChanged(color) => {
-        //         self.background_color = color;
-        //     }
-        //     Message::InputChanged(input) => {
-        //         self.input = input;
-        //     }
-        // }
+    pub fn update(&mut self, message: Message, ctx: &GpuContext, target: &TargetContext) {
+        let next = match message {
+            Message::SwitchScene => match self.scene {
+                CurrentScene::Scene(_) => {
+                    let path = Path::new("image/test.jpg");
+                    CurrentScene::image(path, ctx, target).expect("TODO: error handling")
+                }
+                CurrentScene::Image(_) => CurrentScene::scene(ctx, target),
+            },
+        };
+        self.scene = next;
     }
 
     pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
@@ -84,7 +63,9 @@ impl Controls {
         row![
             column![
                 text("Hello World").style(text::base),
-                button(text("Button").center().width(Fill)).width(Fill)
+                button(text("Button").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::SwitchScene)
             ]
             .width(Shrink)
             .padding(5),
@@ -144,6 +125,29 @@ impl Controls {
         );
 
         Some(render_pass)
+    }
+}
+
+#[expect(clippy::large_enum_variant)]
+enum CurrentScene {
+    Scene(Scene),
+    Image(ImageRenderState),
+}
+
+impl CurrentScene {
+    fn scene(ctx: &GpuContext, target: &TargetContext) -> Self {
+        let scene = Scene::new(ctx, target);
+        Self::Scene(scene)
+    }
+
+    fn image(
+        path: &Path,
+        ctx: &GpuContext,
+        target: &TargetContext,
+    ) -> Result<Self, image::ImageError> {
+        let image = ImageLoaded::load(path, wgpu::TextureFormat::Rgba8UnormSrgb)?;
+        let state = ImageRenderState::new(&image, ctx, target);
+        Ok(Self::Image(state))
     }
 }
 

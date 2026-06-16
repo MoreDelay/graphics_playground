@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::path::Path;
 
 use iced::wgpu::util::DeviceExt as _;
@@ -8,23 +7,23 @@ use crate::{GpuContext, TargetContext};
 
 pub struct ImageRenderState {
     image: ImageUploaded,
-    texture_layout: TextureBindGroupLayout,
-    meta_layout: ImageMetadataBindGroupLayout,
+    _texture_layout: TextureBindGroupLayout,
+    _meta_layout: ImageMetadataBindGroupLayout,
     meta_bind: ImageMetadataBinding,
     pipeline: ImagePipeline,
 }
 
 impl ImageRenderState {
-    pub fn new(image: ImageLoaded, ctx: &GpuContext, target: &TargetContext) -> Self {
+    pub fn new(image: &ImageLoaded, ctx: &GpuContext, target: &TargetContext) -> Self {
         let texture_layout = TextureBindGroupLayout::new(ctx);
         let meta_layout = ImageMetadataBindGroupLayout::new(ctx);
         let uploaded = image.upload(ctx, &texture_layout);
-        let meta_bind = ImageMetadataBinding::for_image(&image, ctx, &meta_layout);
+        let meta_bind = ImageMetadataBinding::for_image(image, ctx, &meta_layout);
         let pipeline = ImagePipeline::new(ctx, target, &texture_layout, &meta_layout);
         Self {
             image: uploaded,
-            texture_layout,
-            meta_layout,
+            _texture_layout: texture_layout,
+            _meta_layout: meta_layout,
             meta_bind,
             pipeline,
         }
@@ -41,9 +40,9 @@ impl ImageRenderState {
 }
 
 struct Texture {
-    _texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    sampler: wgpu::Sampler,
+    _inner: wgpu::Texture,
+    _view: wgpu::TextureView,
+    _sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
 }
 
@@ -108,7 +107,7 @@ impl ImageLoaded {
         Ok(Self { image, format })
     }
 
-    pub fn upload(&self, ctx: &GpuContext, layout: &TextureBindGroupLayout) -> ImageUploaded {
+    fn upload(&self, ctx: &GpuContext, layout: &TextureBindGroupLayout) -> ImageUploaded {
         let size = wgpu::Extent3d {
             width: self.image.width(),
             height: self.image.height(),
@@ -174,19 +173,22 @@ impl ImageLoaded {
             entries: &entries,
         });
         let texture = Texture {
-            _texture: texture,
-            view,
-            sampler,
+            _inner: texture,
+            _view: view,
+            _sampler: sampler,
             bind_group,
         };
 
-        ImageUploaded { texture, size }
+        ImageUploaded {
+            texture,
+            _size: size,
+        }
     }
 }
 
 struct ImageUploaded {
     texture: Texture,
-    size: wgpu::Extent3d,
+    _size: wgpu::Extent3d,
 }
 
 impl std::ops::Deref for ImageUploaded {

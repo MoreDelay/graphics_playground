@@ -61,7 +61,11 @@ impl std::ops::Deref for ImageLoaded {
 }
 
 impl ImageLoaded {
-    pub fn load(path: &Path, format: wgpu::TextureFormat) -> Result<Self, image::ImageError> {
+    pub fn load(path: &Path) -> Result<Self, image::ImageError> {
+        Self::load_as(path, wgpu::TextureFormat::Rgba8UnormSrgb)
+    }
+
+    pub fn load_as(path: &Path, format: wgpu::TextureFormat) -> Result<Self, image::ImageError> {
         let image = image::ImageReader::open(path)?
             .with_guessed_format()?
             .decode()?;

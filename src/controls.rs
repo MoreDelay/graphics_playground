@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::{Renderer, wgpu};
@@ -16,11 +16,13 @@ pub struct Controls {
     // passing a reference to the widget's draw call.
     scene_bounds: Cell<Option<iced::Rectangle>>,
     scene: CurrentScene,
+    image: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Message {
     SwitchScene,
+    SelectFile,
 }
 
 impl Controls {
@@ -30,20 +32,26 @@ impl Controls {
         Self {
             scene_bounds,
             scene,
+            image: None,
         }
     }
 
     pub fn update(&mut self, message: Message, ctx: &GpuContext, target: &TargetContext) {
-        let next = match message {
-            Message::SwitchScene => match self.scene {
-                CurrentScene::Scene(_) => {
-                    let path = Path::new("image/test.jpg");
-                    CurrentScene::image(path, ctx, target).expect("TODO: error handling")
-                }
-                CurrentScene::Image(_) => CurrentScene::scene(ctx, target),
-            },
-        };
-        self.scene = next;
+        match message {
+            Message::SwitchScene => {
+                let next = match self.scene {
+                    CurrentScene::Scene(_) => self.switch_to_image(ctx, target),
+                    CurrentScene::Image(_) => CurrentScene::scene(ctx, target),
+                };
+                self.scene = next;
+            }
+            Message::SelectFile => {
+                self.image = rfd::FileDialog::new()
+                    .add_filter("image", &["jpg", "jpeg", "png"])
+                    .pick_file();
+                self.scene = self.switch_to_image(ctx, target);
+            }
+        }
     }
 
     pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
@@ -63,9 +71,12 @@ impl Controls {
         row![
             column![
                 text("Hello World").style(text::base),
-                button(text("Button").center().width(Fill))
+                button(text("Switch").center().width(Fill))
                     .width(Fill)
-                    .on_press(Message::SwitchScene)
+                    .on_press(Message::SwitchScene),
+                button(text("Pick").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::SelectFile)
             ]
             .width(Shrink)
             .padding(5),
@@ -88,7 +99,8 @@ impl Controls {
 
         match &self.scene {
             CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
-            CurrentScene::Image(image) => image.draw(&mut render_pass),
+            CurrentScene::Image(Some(image)) => image.draw(&mut render_pass),
+            CurrentScene::Image(None) => (),
         }
     }
 
@@ -127,12 +139,17 @@ impl Controls {
 
         Some(render_pass)
     }
+
+    fn switch_to_image(&self, ctx: &GpuContext, target: &TargetContext) -> CurrentScene {
+        let path = self.image.as_deref();
+        CurrentScene::image(path, ctx, target).expect("TODO: error handling")
+    }
 }
 
 #[expect(clippy::large_enum_variant)]
 enum CurrentScene {
     Scene(Scene),
-    Image(ImageRenderState),
+    Image(Option<ImageRenderState>),
 }
 
 impl CurrentScene {
@@ -142,12 +159,14 @@ impl CurrentScene {
     }
 
     fn image(
-        path: &Path,
+        path: Option<&Path>,
         ctx: &GpuContext,
         target: &TargetContext,
     ) -> Result<Self, image::ImageError> {
-        let image = ImageLoaded::load(path, wgpu::TextureFormat::Rgba8UnormSrgb)?;
-        let state = ImageRenderState::new(&image, ctx, target);
+        let state = path
+            .map(ImageLoaded::load)
+            .transpose()?
+            .map(|image| ImageRenderState::new(&image, ctx, target));
         Ok(Self::Image(state))
     }
 }

@@ -4,30 +4,23 @@ use std::path::Path;
 
 use iced::wgpu;
 
-use crate::image::gpu::{
-    ImageMetadataBindGroupLayout,
-    ImageMetadataBinding,
-    ImagePipeline,
-    ImageUploaded,
-    TextureBindGroupLayout,
-};
 use crate::{GpuContext, TargetContext};
 
 pub struct ImageRenderState {
-    image: ImageUploaded,
-    _texture_layout: TextureBindGroupLayout,
-    _meta_layout: ImageMetadataBindGroupLayout,
-    meta_bind: ImageMetadataBinding,
-    pipeline: ImagePipeline,
+    image: gpu::ImageUploaded,
+    _texture_layout: gpu::TextureBindGroupLayout,
+    _meta_layout: gpu::ImageMetadataBindGroupLayout,
+    meta_bind: gpu::ImageMetadataBinding,
+    pipeline: gpu::ImagePipeline,
 }
 
 impl ImageRenderState {
     pub fn new(image: &ImageLoaded, ctx: &GpuContext, target: &TargetContext) -> Self {
-        let texture_layout = TextureBindGroupLayout::new(ctx);
-        let meta_layout = ImageMetadataBindGroupLayout::new(ctx);
-        let uploaded = image.upload(ctx, &texture_layout);
-        let meta_bind = ImageMetadataBinding::for_image(image, ctx, &meta_layout);
-        let pipeline = ImagePipeline::new(ctx, target, &texture_layout, &meta_layout);
+        let texture_layout = gpu::TextureBindGroupLayout::new(ctx);
+        let meta_layout = gpu::ImageMetadataBindGroupLayout::new(ctx);
+        let uploaded = gpu::ImageUploaded::upload(image, ctx, &texture_layout);
+        let meta_bind = gpu::ImageMetadataBinding::for_image(image, ctx, &meta_layout);
+        let pipeline = gpu::ImagePipeline::new(ctx, target, &texture_layout, &meta_layout);
         Self {
             image: uploaded,
             _texture_layout: texture_layout,
@@ -39,7 +32,22 @@ impl ImageRenderState {
 }
 
 impl ImageRenderState {
-    pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+    pub fn draw(
+        &self,
+        ctx: &GpuContext,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        viewport: iced::Rectangle,
+    ) {
+        let image = self.image.size();
+
+        let raw = gpu::ImageMetadataRaw {
+            view_size: [viewport.width, viewport.height],
+            #[expect(clippy::cast_precision_loss)]
+            image_size: [image.width as f32, image.height as f32],
+            start: [0., 0.],
+        };
+        self.meta_bind.update(&raw, ctx);
+
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, self.image.bind_group(), &[]);
         render_pass.set_bind_group(1, &*self.meta_bind, &[]);
@@ -71,9 +79,5 @@ impl ImageLoaded {
             .decode()?;
         let image = image.into();
         Ok(Self { image, format })
-    }
-
-    fn upload(&self, ctx: &GpuContext, layout: &TextureBindGroupLayout) -> ImageUploaded {
-        ImageUploaded::upload(self, ctx, layout)
     }
 }

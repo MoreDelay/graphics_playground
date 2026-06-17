@@ -92,14 +92,19 @@ impl Controls {
         }
     }
 
-    pub fn draw_wgpu(&self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
-        let Some(mut render_pass) = self.start_render_pass(view, encoder) else {
+    pub fn draw_wgpu(
+        &self,
+        ctx: &GpuContext,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let Some((mut render_pass, bounds)) = self.start_render_pass(view, encoder) else {
             return;
         };
 
         match &self.scene {
             CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
-            CurrentScene::Image(Some(image)) => image.draw(&mut render_pass),
+            CurrentScene::Image(Some(image)) => image.draw(ctx, &mut render_pass, bounds),
             CurrentScene::Image(None) => (),
         }
     }
@@ -108,7 +113,7 @@ impl Controls {
         &self,
         target: &'a wgpu::TextureView,
         encoder: &'a mut wgpu::CommandEncoder,
-    ) -> Option<wgpu::RenderPass<'a>> {
+    ) -> Option<(wgpu::RenderPass<'a>, iced::Rectangle)> {
         let bounds = self.scene_bounds.take()?;
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -137,7 +142,7 @@ impl Controls {
         //     bounds.height.ceil() as u32,
         // );
 
-        Some(render_pass)
+        Some((render_pass, bounds))
     }
 
     fn switch_to_image(&self, ctx: &GpuContext, target: &TargetContext) -> CurrentScene {

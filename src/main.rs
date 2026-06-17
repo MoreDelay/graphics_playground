@@ -338,7 +338,7 @@ impl Ready {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        self.controls.draw_wgpu(&view, &mut encoder);
+        self.controls.draw_wgpu(&self.gpu_ctx, &view, &mut encoder);
 
         // Submit the scene
         self.gpu_ctx.queue.submit([encoder.finish()]);

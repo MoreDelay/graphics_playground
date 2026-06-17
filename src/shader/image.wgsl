@@ -4,9 +4,9 @@ struct VSOutput {
 };
 
 struct ImageMetadata {
-    size: vec2<f32>,
+    view_size: vec2<f32>,
+    image_size: vec2<f32>,
     start: vec2<f32>,
-    area: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -45,9 +45,17 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VSOutput {
 
 @fragment
 fn fs_main(in: VSOutput) -> @location(0) vec4<f32> {
-    let uv = in.uv * 1.5 - 0.25;
+    var uv: vec2<f32> = in.uv;
+    let view_aspect = metadata.view_size.x / metadata.view_size.y;
+    let image_aspect = metadata.image_size.x / metadata.image_size.y;
 
-    let inside = 0. <= uv.x && uv.x <= 1. && 0. <= uv.y && uv.y <= 1. ;
+    if image_aspect >= view_aspect {
+        uv.y = uv.y / view_aspect * image_aspect;
+    } else {
+        uv.x = uv.x / image_aspect * view_aspect;
+    }
+
+    let inside = 0. <= uv.x && uv.x <= 1. && 0. <= uv.y && uv.y <= 1.;
     if !inside { discard; }
     let color = textureSample(t_image, s_image, uv);
     return color;

@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt as _;
 
@@ -89,7 +91,13 @@ impl std::ops::Deref for ImagePipeline {
 
 pub struct ImageUploaded {
     texture: Texture,
-    _size: wgpu::Extent3d,
+    size: wgpu::Extent3d,
+}
+
+impl ImageUploaded {
+    pub const fn size(&self) -> wgpu::Extent3d {
+        self.size
+    }
 }
 
 impl std::ops::Deref for ImageUploaded {
@@ -175,10 +183,7 @@ impl ImageUploaded {
             bind_group,
         };
 
-        Self {
-            texture,
-            _size: size,
-        }
+        Self { texture, size }
     }
 }
 
@@ -197,7 +202,7 @@ impl Texture {
 
 pub struct ImageMetadataBinding {
     bind_group: wgpu::BindGroup,
-    _buffer: wgpu::Buffer,
+    buffer: wgpu::Buffer,
 }
 
 impl ImageMetadataBinding {
@@ -208,9 +213,9 @@ impl ImageMetadataBinding {
     ) -> Self {
         #[expect(clippy::cast_precision_loss)]
         let data = ImageMetadataRaw {
-            size: [image.width() as f32, image.height() as f32],
+            view_size: [image.width() as f32, image.height() as f32],
+            image_size: [image.width() as f32, image.height() as f32],
             start: [0., 0.],
-            area: [image.width() as f32, image.height() as f32],
         };
         let buffer = ctx
             .device
@@ -227,10 +232,19 @@ impl ImageMetadataBinding {
                 resource: buffer.as_entire_binding(),
             }],
         });
-        Self {
-            bind_group,
-            _buffer: buffer,
-        }
+        Self { bind_group, buffer }
+    }
+
+    pub fn update(&self, raw: &ImageMetadataRaw, ctx: &GpuContext) {
+        const SIZE: NonZeroU64 = NonZeroU64::new(std::mem::size_of::<ImageMetadataRaw>() as u64)
+            .expect("struct not empty");
+
+        let mut view = ctx
+            .queue
+            .write_buffer_with(&self.buffer, 0, SIZE)
+            .expect("failed creating temporary buffer for upload");
+
+        view.copy_from_slice(bytemuck::cast_slice(&[*raw]));
     }
 }
 
@@ -316,9 +330,9 @@ impl std::ops::Deref for ImageMetadataBindGroupLayout {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ImageMetadataRaw {
     /// (width, height) of the whole image
-    pub size: [f32; 2],
+    pub view_size: [f32; 2],
     /// (x, y) of the top left corner
-    pub start: [f32; 2],
+    pub image_size: [f32; 2],
     /// (width, height) of the visible area
-    pub area: [f32; 2],
+    pub start: [f32; 2],
 }

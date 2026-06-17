@@ -3,12 +3,12 @@ use iced_winit::core::Color;
 
 use crate::{GpuContext, TargetContext};
 
-pub struct Scene {
+pub struct RenderWidget {
     pipeline: wgpu::RenderPipeline,
     bg_color: Color,
 }
 
-impl Scene {
+impl RenderWidget {
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let pipeline = build_pipeline(ctx, target);
         let bg_color = Color::BLACK;

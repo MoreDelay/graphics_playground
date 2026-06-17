@@ -7,8 +7,8 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit;
 
-use crate::image::{ImageLoaded, ImageRenderState};
-use crate::scene::Scene;
+use crate::image::{ImageLoaded, ImageWidget};
+use crate::scene::RenderWidget;
 use crate::{GpuContext, TargetContext};
 
 pub struct Controls {
@@ -23,6 +23,8 @@ pub struct Controls {
 pub enum Message {
     SwitchScene,
     SelectFile,
+    ScrollUp,
+    ScrollDown,
 }
 
 impl Controls {
@@ -33,24 +35,6 @@ impl Controls {
             scene_bounds,
             scene,
             image: None,
-        }
-    }
-
-    pub fn update(&mut self, message: Message, ctx: &GpuContext, target: &TargetContext) {
-        match message {
-            Message::SwitchScene => {
-                let next = match self.scene {
-                    CurrentScene::Scene(_) => self.switch_to_image(ctx, target),
-                    CurrentScene::Image(_) => CurrentScene::scene(ctx, target),
-                };
-                self.scene = next;
-            }
-            Message::SelectFile => {
-                self.image = rfd::FileDialog::new()
-                    .add_filter("image", &["jpg", "jpeg", "png"])
-                    .pick_file();
-                self.scene = self.switch_to_image(ctx, target);
-            }
         }
     }
 
@@ -85,6 +69,34 @@ impl Controls {
         .into()
     }
 
+    pub fn update(&mut self, message: Message, ctx: &GpuContext, target: &TargetContext) {
+        match (&mut self.scene, message) {
+            (CurrentScene::Scene(_), Message::SwitchScene) => {
+                self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
+            }
+            (CurrentScene::Scene(_), Message::SelectFile) => {
+                self.image = Self::pick_image_dialog();
+                self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
+            }
+            (CurrentScene::Scene(_), Message::ScrollUp) => (),
+            (CurrentScene::Scene(_), Message::ScrollDown) => (),
+
+            (CurrentScene::Image(_), Message::SwitchScene) => {
+                self.scene = CurrentScene::scene(ctx, target);
+            }
+            (CurrentScene::Image(_), Message::SelectFile) => {
+                self.image = Self::pick_image_dialog();
+                self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
+            }
+            (CurrentScene::Image(widget), Message::ScrollUp) => {
+                widget.zoom_in();
+            }
+            (CurrentScene::Image(widget), Message::ScrollDown) => {
+                widget.zoom_out();
+            }
+        }
+    }
+
     pub const fn min_window_size() -> winit::dpi::PhysicalSize<u32> {
         winit::dpi::PhysicalSize {
             width: 200 + 100,
@@ -104,8 +116,7 @@ impl Controls {
 
         match &self.scene {
             CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
-            CurrentScene::Image(Some(image)) => image.draw(ctx, &mut render_pass, bounds),
-            CurrentScene::Image(None) => (),
+            CurrentScene::Image(image) => image.draw(ctx, &mut render_pass, bounds),
         }
     }
 
@@ -145,33 +156,34 @@ impl Controls {
         Some((render_pass, bounds))
     }
 
-    fn switch_to_image(&self, ctx: &GpuContext, target: &TargetContext) -> CurrentScene {
-        let path = self.image.as_deref();
-        CurrentScene::image(path, ctx, target)
+    fn pick_image_dialog() -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .add_filter("image", &["jpg", "jpeg", "png"])
+            .pick_file()
     }
 }
 
 #[expect(clippy::large_enum_variant)]
 enum CurrentScene {
-    Scene(Scene),
-    Image(Option<ImageRenderState>),
+    Scene(RenderWidget),
+    Image(ImageWidget),
 }
 
 impl CurrentScene {
     fn scene(ctx: &GpuContext, target: &TargetContext) -> Self {
-        let scene = Scene::new(ctx, target);
+        let scene = RenderWidget::new(ctx, target);
         Self::Scene(scene)
     }
 
     fn image(path: Option<&Path>, ctx: &GpuContext, target: &TargetContext) -> Self {
-        let state = path.and_then(|path| match ImageLoaded::load(path) {
-            Ok(image) => Some(ImageRenderState::new(&image, ctx, target)),
-            Err(err) => {
-                eprintln!("could not load image: {err}");
-                None
+        let mut widget = ImageWidget::new();
+        if let Some(path) = path {
+            match ImageLoaded::load(path) {
+                Ok(image) => widget.set_image(image, ctx, target),
+                Err(err) => eprintln!("could not load image: {err}"),
             }
-        });
-        Self::Image(state)
+        }
+        Self::Image(widget)
     }
 }
 

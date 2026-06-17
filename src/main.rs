@@ -3,22 +3,28 @@ mod image;
 mod scene;
 
 use std::sync::Arc;
+use std::time::Instant;
 
-use controls::Controls;
-use iced_wgpu::graphics::{Shell, Viewport};
+use iced::Event;
+use iced::advanced::mouse::Cursor;
+use iced::futures::executor::block_on;
+use iced_graphics::{Shell, Viewport};
 use iced_wgpu::{Engine, Renderer, wgpu};
-use iced_winit::core::time::Instant;
-use iced_winit::core::{Event, Font, Pixels, Size, Theme, mouse, renderer, window};
-use iced_winit::runtime::user_interface::{self, UserInterface};
-use iced_winit::winit::dpi::PhysicalPosition;
-use iced_winit::winit::event::Modifiers;
-use iced_winit::{Clipboard, conversion, futures, winit};
+use iced_winit::conversion::{cursor_position, window_event};
+use iced_winit::core::{renderer, window};
+use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
+use iced_winit::{Clipboard, winit};
 use tracing::warn;
-use winit::event::WindowEvent;
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::error::EventLoopError;
+use winit::event::{Modifiers, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
+use winit::window::{Window, WindowAttributes};
 
-pub fn main() -> Result<(), winit::error::EventLoopError> {
+use crate::controls::{Controls, Message};
+
+pub fn main() -> Result<(), EventLoopError> {
     tracing_subscriber::fmt::init();
 
     // Initialize winit
@@ -39,14 +45,14 @@ struct TargetContext {
 }
 
 struct Ready {
-    window: Arc<winit::window::Window>,
+    window: Arc<Window>,
     gpu_ctx: GpuContext,
     target_ctx: TargetContext,
     renderer: Renderer,
     controls: Controls,
     events: Vec<Event>,
-    cursor: mouse::Cursor,
-    cache: user_interface::Cache,
+    cursor: Cursor,
+    cache: Cache,
     clipboard: Clipboard,
     viewport: Viewport,
     modifiers: ModifiersState,
@@ -60,7 +66,7 @@ enum Runner {
 }
 
 impl winit::application::ApplicationHandler for Runner {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Self::Loading = self else {
             return;
         };
@@ -70,7 +76,7 @@ impl winit::application::ApplicationHandler for Runner {
 
     fn window_event(
         &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
@@ -85,6 +91,7 @@ impl winit::application::ApplicationHandler for Runner {
         match event {
             WindowEvent::RedrawRequested => ready.redraw(),
             WindowEvent::CursorMoved { position, .. } => ready.cursor_moved(position),
+            WindowEvent::MouseWheel { delta, .. } => ready.scrolled(delta),
             WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changed(modifiers),
             WindowEvent::Resized(_) => ready.resized(),
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -103,7 +110,7 @@ impl winit::application::ApplicationHandler for Runner {
         // Map window event to iced event
         #[expect(clippy::cast_possible_truncation)]
         let scale_factor = ready.window.scale_factor() as f32;
-        if let Some(event) = conversion::window_event(event, scale_factor, ready.modifiers) {
+        if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
             ready.events.push(event);
         }
 
@@ -144,9 +151,9 @@ impl winit::application::ApplicationHandler for Runner {
 }
 
 impl Ready {
-    fn new(event_loop: &winit::event_loop::ActiveEventLoop) -> Self {
+    fn new(event_loop: &ActiveEventLoop) -> Self {
         // Initialize window with winit
-        let mut window = winit::window::WindowAttributes::default();
+        let mut window = WindowAttributes::default();
         window.min_inner_size = Some(Controls::min_window_size().into());
         let window = Arc::new(event_loop.create_window(window).expect("Create window"));
 
@@ -160,7 +167,7 @@ impl Ready {
             .create_surface(Arc::clone(&window))
             .expect("Create window surface");
 
-        let (format, adapter, device, queue) = futures::futures::executor::block_on(async {
+        let (format, adapter, device, queue) = block_on(async {
             let adapter =
                 wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface))
                     .await
@@ -220,7 +227,7 @@ impl Ready {
         #[expect(clippy::cast_possible_truncation)]
         let scale_factor = window.scale_factor() as f32;
         let viewport = Viewport::with_physical_size(
-            Size::new(physical_size.width, physical_size.height),
+            iced::Size::new(physical_size.width, physical_size.height),
             scale_factor,
         );
         let clipboard = Clipboard::connect(Arc::clone(&window));
@@ -233,7 +240,7 @@ impl Ready {
             None,
             Shell::headless(),
         );
-        let renderer = Renderer::new(engine, Font::default(), Pixels::from(16));
+        let renderer = Renderer::new(engine, iced::Font::default(), iced::Pixels::from(16));
 
         // You should change this if you want to render continuously
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -244,9 +251,9 @@ impl Ready {
             renderer,
             controls,
             events: Vec::new(),
-            cursor: mouse::Cursor::Unavailable,
+            cursor: Cursor::Unavailable,
             modifiers: ModifiersState::default(),
-            cache: user_interface::Cache::new(),
+            cache: Cache::new(),
             clipboard,
             viewport,
             resized: false,
@@ -297,7 +304,7 @@ impl Ready {
         );
 
         // Update the mouse cursor
-        if let user_interface::State::Updated {
+        if let State::Updated {
             mouse_interaction, ..
         } = state
         {
@@ -313,7 +320,7 @@ impl Ready {
         // Draw the interface
         interface.draw(
             &mut self.renderer,
-            &Theme::Dark,
+            &iced::Theme::Dark,
             &renderer::Style::default(),
             self.cursor,
         );
@@ -348,13 +355,13 @@ impl Ready {
     }
 
     fn do_resize(&mut self) {
-        let winit::dpi::PhysicalSize { width, height } = self.window.inner_size();
+        let PhysicalSize { width, height } = self.window.inner_size();
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
 
         #[expect(clippy::cast_possible_truncation)]
         let scale_factor = self.window.scale_factor() as f32;
-        self.viewport = Viewport::with_physical_size(Size::new(width, height), scale_factor);
+        self.viewport = Viewport::with_physical_size(iced::Size::new(width, height), scale_factor);
 
         self.target_ctx
             .surface
@@ -362,10 +369,25 @@ impl Ready {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        self.cursor = mouse::Cursor::Available(conversion::cursor_position(
-            position,
-            self.viewport.scale_factor(),
-        ));
+        self.cursor = Cursor::Available(cursor_position(position, self.viewport.scale_factor()));
+    }
+
+    fn scrolled(&mut self, delta: MouseScrollDelta) {
+        use std::cmp::Ordering;
+
+        let cmp = match delta {
+            MouseScrollDelta::LineDelta(_, delta) => delta.total_cmp(&0.),
+            MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => y.total_cmp(&0.),
+        };
+        let message = match cmp {
+            Ordering::Less => Some(Message::ScrollDown),
+            Ordering::Equal => None,
+            Ordering::Greater => Some(Message::ScrollUp),
+        };
+        if let Some(message) = message {
+            self.controls
+                .update(message, &self.gpu_ctx, &self.target_ctx);
+        }
     }
 
     fn modifiers_changed(&mut self, modifiers: Modifiers) {

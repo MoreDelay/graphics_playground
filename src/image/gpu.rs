@@ -216,6 +216,8 @@ impl ImageMetadataBinding {
             view_size: [image.width() as f32, image.height() as f32],
             image_size: [image.width() as f32, image.height() as f32],
             start: [0., 0.],
+            scale: 1.,
+            _pad: 0,
         };
         let buffer = ctx
             .device
@@ -235,7 +237,7 @@ impl ImageMetadataBinding {
         Self { bind_group, buffer }
     }
 
-    pub fn update(&self, raw: &ImageMetadataRaw, ctx: &GpuContext) {
+    pub fn update(&self, ctx: &GpuContext, raw: &ImageMetadataRaw) {
         const SIZE: NonZeroU64 = NonZeroU64::new(std::mem::size_of::<ImageMetadataRaw>() as u64)
             .expect("struct not empty");
 
@@ -335,4 +337,8 @@ pub struct ImageMetadataRaw {
     pub image_size: [f32; 2],
     /// (width, height) of the visible area
     pub start: [f32; 2],
+    /// scale of image
+    pub scale: f32,
+    /// padding to get to a multiple of alignment bytes (8)
+    pub _pad: u32,
 }

@@ -7,6 +7,7 @@ struct ImageMetadata {
     view_size: vec2<f32>,
     image_size: vec2<f32>,
     start: vec2<f32>,
+    scale: f32,
 }
 
 @group(0) @binding(0)
@@ -45,15 +46,16 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VSOutput {
 
 @fragment
 fn fs_main(in: VSOutput) -> @location(0) vec4<f32> {
-    var uv: vec2<f32> = in.uv;
-    let view_aspect = metadata.view_size.x / metadata.view_size.y;
-    let image_aspect = metadata.image_size.x / metadata.image_size.y;
-
-    if image_aspect >= view_aspect {
-        uv.y = uv.y / view_aspect * image_aspect;
-    } else {
-        uv.x = uv.x / image_aspect * view_aspect;
-    }
+    // var uv: vec2<f32> = in.uv;
+    // let view_aspect = metadata.view_size.x / metadata.view_size.y;
+    // let image_aspect = metadata.image_size.x / metadata.image_size.y;
+    //
+    // if image_aspect >= view_aspect {
+    //     uv.y = uv.y / view_aspect * image_aspect;
+    // } else {
+    //     uv.x = uv.x / image_aspect * view_aspect;
+    // }
+    let uv = ((in.uv * metadata.view_size - metadata.start) / metadata.scale) / metadata.image_size;
 
     let inside = 0. <= uv.x && uv.x <= 1. && 0. <= uv.y && uv.y <= 1.;
     if !inside { discard; }

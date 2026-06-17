@@ -83,3 +83,6 @@ unused_trait_names = "warn"
 unwrap_used = "warn"
 verbose_file_reads = "warn"
 wildcard_enum_match_arm = "warn"
+
+[profile.dev.package."*"]
+opt-level = 2

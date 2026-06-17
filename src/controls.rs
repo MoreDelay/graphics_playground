@@ -147,7 +147,7 @@ impl Controls {
 
     fn switch_to_image(&self, ctx: &GpuContext, target: &TargetContext) -> CurrentScene {
         let path = self.image.as_deref();
-        CurrentScene::image(path, ctx, target).expect("TODO: error handling")
+        CurrentScene::image(path, ctx, target)
     }
 }
 
@@ -163,16 +163,15 @@ impl CurrentScene {
         Self::Scene(scene)
     }
 
-    fn image(
-        path: Option<&Path>,
-        ctx: &GpuContext,
-        target: &TargetContext,
-    ) -> Result<Self, image::ImageError> {
-        let state = path
-            .map(ImageLoaded::load)
-            .transpose()?
-            .map(|image| ImageRenderState::new(&image, ctx, target));
-        Ok(Self::Image(state))
+    fn image(path: Option<&Path>, ctx: &GpuContext, target: &TargetContext) -> Self {
+        let state = path.and_then(|path| match ImageLoaded::load(path) {
+            Ok(image) => Some(ImageRenderState::new(&image, ctx, target)),
+            Err(err) => {
+                eprintln!("could not load image: {err}");
+                None
+            }
+        });
+        Self::Image(state)
     }
 }
 

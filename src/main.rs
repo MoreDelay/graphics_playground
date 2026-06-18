@@ -13,6 +13,7 @@ use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::conversion::{cursor_position, window_event};
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
+use iced_winit::winit::event::{ElementState, MouseButton};
 use iced_winit::{Clipboard, winit};
 use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -52,6 +53,7 @@ struct Ready {
     controls: Controls,
     events: Vec<Event>,
     cursor: Cursor,
+    dragging: DraggingState,
     cache: Cache,
     clipboard: Clipboard,
     viewport: Viewport,
@@ -91,6 +93,7 @@ impl winit::application::ApplicationHandler for Runner {
         match event {
             WindowEvent::RedrawRequested => ready.redraw(),
             WindowEvent::CursorMoved { position, .. } => ready.cursor_moved(position),
+            WindowEvent::MouseInput { state, button, .. } => ready.mouse_input(button, state),
             WindowEvent::MouseWheel { delta, .. } => ready.scrolled(delta),
             WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changed(modifiers),
             WindowEvent::Resized(_) => ready.resized(),
@@ -252,6 +255,7 @@ impl Ready {
             controls,
             events: Vec::new(),
             cursor: Cursor::Unavailable,
+            dragging: DraggingState::default(),
             modifiers: ModifiersState::default(),
             cache: Cache::new(),
             clipboard,
@@ -369,7 +373,42 @@ impl Ready {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        self.cursor = Cursor::Available(cursor_position(position, self.viewport.scale_factor()));
+        let after = cursor_position(position, self.viewport.scale_factor());
+        let before = self.cursor;
+        self.cursor = Cursor::Available(after);
+
+        let Cursor::Available(before) = before else {
+            self.dragging = DraggingState::Released;
+            return;
+        };
+
+        if let DraggingState::Dragging { accumulated } = &mut self.dragging {
+            *accumulated += after - before;
+
+            #[expect(clippy::cast_possible_truncation)]
+            let message = Message::Drag {
+                x: accumulated.x.trunc() as i32,
+                y: accumulated.y.trunc() as i32,
+            };
+
+            accumulated.x = accumulated.x.fract();
+            accumulated.y = accumulated.y.fract();
+
+            self.controls
+                .update(message, &self.gpu_ctx, &self.target_ctx);
+        }
+    }
+
+    const fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
+        match (button, state) {
+            (MouseButton::Left, ElementState::Pressed) => {
+                self.dragging = DraggingState::Dragging {
+                    accumulated: iced::Vector::ZERO,
+                }
+            }
+            (MouseButton::Left, ElementState::Released) => self.dragging = DraggingState::Released,
+            _ => (),
+        }
     }
 
     fn scrolled(&mut self, delta: MouseScrollDelta) {
@@ -397,4 +436,13 @@ impl Ready {
     const fn resized(&mut self) {
         self.resized = true;
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum DraggingState {
+    #[default]
+    Released,
+    Dragging {
+        accumulated: iced::Vector,
+    },
 }

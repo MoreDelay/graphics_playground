@@ -25,6 +25,7 @@ pub enum Message {
     SelectFile,
     ScrollUp,
     ScrollDown,
+    Drag { x: i32, y: i32 },
 }
 
 impl Controls {
@@ -80,6 +81,7 @@ impl Controls {
             }
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
+            (CurrentScene::Scene(_), Message::Drag { .. }) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::scene(ctx, target);
@@ -94,6 +96,9 @@ impl Controls {
             (CurrentScene::Image(widget), Message::ScrollDown) => {
                 widget.zoom_out();
             }
+            (CurrentScene::Image(widget), Message::Drag { x, y }) => {
+                widget.pan(x, y);
+            }
         }
     }
 
@@ -105,7 +110,7 @@ impl Controls {
     }
 
     pub fn draw_wgpu(
-        &self,
+        &mut self,
         ctx: &GpuContext,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
@@ -114,7 +119,7 @@ impl Controls {
             return;
         };
 
-        match &self.scene {
+        match &mut self.scene {
             CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
             CurrentScene::Image(image) => image.draw(ctx, &mut render_pass, bounds),
         }

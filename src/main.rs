@@ -14,6 +14,7 @@ use iced_winit::conversion::{cursor_position, window_event};
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::winit::event::{ElementState, MouseButton};
+use iced_winit::winit::keyboard::KeyCode;
 use iced_winit::{Clipboard, winit};
 use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -104,7 +105,8 @@ impl winit::application::ApplicationHandler for Runner {
                     PhysicalKey::Code(KeyCode::KeyQ) if ready.modifiers.control_key() => {
                         event_loop.exit();
                     }
-                    _ => (),
+                    PhysicalKey::Code(key) => ready.key_pressed(*key),
+                    PhysicalKey::Unidentified(_) => (),
                 }
             }
             _ => {}
@@ -422,6 +424,19 @@ impl Ready {
             Ordering::Less => Some(Message::ScrollDown),
             Ordering::Equal => None,
             Ordering::Greater => Some(Message::ScrollUp),
+        };
+        if let Some(message) = message {
+            self.controls
+                .update(message, &self.gpu_ctx, &self.target_ctx);
+        }
+    }
+
+    fn key_pressed(&mut self, key: KeyCode) {
+        #[expect(clippy::wildcard_enum_match_arm)]
+        let message = match key {
+            KeyCode::Digit1 => Some(Message::SetZoom(1.)),
+            KeyCode::Digit2 => Some(Message::SetZoom(2.)),
+            _ => None,
         };
         if let Some(message) = message {
             self.controls

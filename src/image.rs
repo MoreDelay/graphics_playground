@@ -69,6 +69,12 @@ impl ImageWidget {
             data.draw_state.pan(x, y, &data.image);
         }
     }
+
+    pub const fn set_zoom(&mut self, scale: f32) {
+        if let Some(data) = &mut self.data {
+            data.draw_state.set_zoom(scale);
+        }
+    }
 }
 
 pub struct ImageLoaded {
@@ -182,20 +188,22 @@ struct ImageDrawState {
 
 impl ImageDrawState {
     const SCALE_INCREASE_FACTOR: f32 = 1.1;
+    const SCALE_MAX: f32 = 15.0;
+    const SCALE_MIN: f32 = 0.05;
 
-    pub fn zoom_in(&mut self) {
+    fn zoom_in(&mut self) {
         let scale = self.scale * Self::SCALE_INCREASE_FACTOR;
-        let scale = scale.min(15.);
+        let scale = scale.min(Self::SCALE_MAX);
         self.scale = scale;
     }
 
-    pub fn zoom_out(&mut self) {
+    fn zoom_out(&mut self) {
         let scale = self.scale / Self::SCALE_INCREASE_FACTOR;
-        let scale = scale.max(0.05);
+        let scale = scale.max(Self::SCALE_MIN);
         self.scale = scale;
     }
 
-    pub fn pan(&mut self, x: i32, y: i32, image: &ImageLoaded) {
+    fn pan(&mut self, x: i32, y: i32, image: &ImageLoaded) {
         let x = self.offset.x + x;
         let y = self.offset.y + y;
         #[expect(clippy::cast_possible_wrap)]
@@ -210,6 +218,9 @@ impl ImageDrawState {
         );
         let offset = iced::Point::new(x, y);
         self.offset = offset;
+    }
+    const fn set_zoom(&mut self, scale: f32) {
+        self.scale = scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
     }
 }
 

@@ -26,6 +26,7 @@ pub enum Message {
     ScrollUp,
     ScrollDown,
     Drag { x: i32, y: i32 },
+    SetZoom(f32),
 }
 
 impl Controls {
@@ -82,6 +83,7 @@ impl Controls {
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
             (CurrentScene::Scene(_), Message::Drag { .. }) => (),
+            (CurrentScene::Scene(_), Message::SetZoom(..)) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::scene(ctx, target);
@@ -98,6 +100,9 @@ impl Controls {
             }
             (CurrentScene::Image(widget), Message::Drag { x, y }) => {
                 widget.pan(x, y);
+            }
+            (CurrentScene::Image(widget), Message::SetZoom(scale)) => {
+                widget.set_zoom(scale);
             }
         }
     }

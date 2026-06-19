@@ -384,17 +384,9 @@ impl Ready {
             return;
         };
 
-        if let DraggingState::Dragging { accumulated } = &mut self.dragging {
-            *accumulated += after - before;
-
-            #[expect(clippy::cast_possible_truncation)]
-            let message = Message::Drag {
-                x: accumulated.x.trunc() as i32,
-                y: accumulated.y.trunc() as i32,
-            };
-
-            accumulated.x = accumulated.x.fract();
-            accumulated.y = accumulated.y.fract();
+        if self.dragging == DraggingState::Dragging {
+            let offset = after - before;
+            let message = Message::Drag(offset);
 
             self.controls
                 .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
@@ -403,11 +395,7 @@ impl Ready {
 
     const fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
         match (button, state) {
-            (MouseButton::Left, ElementState::Pressed) => {
-                self.dragging = DraggingState::Dragging {
-                    accumulated: iced::Vector::ZERO,
-                }
-            }
+            (MouseButton::Left, ElementState::Pressed) => self.dragging = DraggingState::Dragging,
             (MouseButton::Left, ElementState::Released) => self.dragging = DraggingState::Released,
             _ => (),
         }
@@ -453,11 +441,9 @@ impl Ready {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum DraggingState {
     #[default]
     Released,
-    Dragging {
-        accumulated: iced::Vector,
-    },
+    Dragging,
 }

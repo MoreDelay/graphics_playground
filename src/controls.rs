@@ -26,7 +26,7 @@ pub enum Message {
     SelectFile,
     ScrollUp,
     ScrollDown,
-    Drag { x: i32, y: i32 },
+    Drag(iced::Vector),
     SetZoom(f32),
 }
 
@@ -111,8 +111,8 @@ impl Controls {
                 let fix_point = cursor.position();
                 widget.set_zoom(scale, fix_point);
             }
-            (CurrentScene::Image(widget), Message::Drag { x, y }) => {
-                widget.pan(x, y);
+            (CurrentScene::Image(widget), Message::Drag(offset)) => {
+                widget.pan(offset);
             }
         }
     }

@@ -18,8 +18,14 @@ impl ImageWidget {
 
     pub fn set_image(&mut self, image: ImageLoaded, ctx: &GpuContext, target: &TargetContext) {
         let render_state = ImageRenderState::new(&image, ctx, target);
+
+        #[expect(clippy::cast_precision_loss)]
+        let size = iced::Size {
+            width: image.width() as f32,
+            height: image.height() as f32,
+        };
         let draw_state = ImageDrawState {
-            image: image.size(),
+            size,
             ..Default::default()
         };
         let data = WidgetData {
@@ -37,30 +43,15 @@ impl ImageWidget {
         viewport: iced::Rectangle,
     ) {
         if let Some(data) = &mut self.data {
-            let iced::Rectangle {
-                x,
-                y,
-                width,
-                height,
-            } = viewport;
-            let widget_offset = iced::Vector { x, y };
-            #[expect(clippy::cast_possible_truncation)]
-            let size = iced::Size {
-                width: (width - x.fract()).ceil() as u32,
-                height: (height - y.fract()).ceil() as u32,
-            };
-
-            data.draw_state.widget_offset = widget_offset;
-            data.draw_state.viewport = size;
-            data.render_state
-                .draw(ctx, render_pass, viewport, &data.draw_state);
+            data.draw_state.viewport = viewport;
+            data.render_state.draw(ctx, render_pass, &data.draw_state);
         }
     }
 
     pub fn zoom_in(&mut self, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
             let fix_point = match fix_point {
-                Some(p) => p - data.draw_state.widget_offset,
+                Some(p) => p - data.draw_state.widget_offset(),
                 None => iced::Point::default(),
             };
             data.draw_state.zoom_in(fix_point);
@@ -70,7 +61,7 @@ impl ImageWidget {
     pub fn zoom_out(&mut self, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
             let fix_point = match fix_point {
-                Some(p) => p - data.draw_state.widget_offset,
+                Some(p) => p - data.draw_state.widget_offset(),
                 None => iced::Point::default(),
             };
             data.draw_state.zoom_out(fix_point);
@@ -80,16 +71,16 @@ impl ImageWidget {
     pub fn set_zoom(&mut self, scale: f32, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
             let fix_point = match fix_point {
-                Some(p) => p - data.draw_state.widget_offset,
+                Some(p) => p - data.draw_state.widget_offset(),
                 None => iced::Point::default(),
             };
             data.draw_state.set_zoom(scale, fix_point);
         }
     }
 
-    pub fn pan(&mut self, x: i32, y: i32) {
+    pub fn pan(&mut self, offset: iced::Vector) {
         if let Some(data) = &mut self.data {
-            data.draw_state.pan(x, y);
+            data.draw_state.pan(offset);
         }
     }
 }
@@ -110,13 +101,6 @@ impl ImageLoaded {
             .decode()?;
         let image = image.into();
         Ok(Self { image, format })
-    }
-
-    pub fn size(&self) -> iced::Size<u32> {
-        iced::Size {
-            width: self.image.width(),
-            height: self.image.height(),
-        }
     }
 }
 
@@ -164,18 +148,16 @@ impl ImageRenderState {
         &self,
         ctx: &GpuContext,
         render_pass: &mut wgpu::RenderPass<'_>,
-        viewport: iced::Rectangle,
-        options: &ImageDrawState,
+        state: &ImageDrawState,
     ) {
-        let view_size = [viewport.width, viewport.height];
+        let view_size = [state.viewport.width, state.viewport.height];
         let image_size = {
             let wgpu::Extent3d { width, height, .. } = self.image.size();
             #[expect(clippy::cast_precision_loss)]
             [width as f32, height as f32]
         };
-        #[expect(clippy::cast_precision_loss)]
-        let start = [options.image_offset.x as f32, options.image_offset.y as f32];
-        let scale = options.scale;
+        let start = [state.offset.x, state.offset.y];
+        let scale = state.scale;
 
         let raw = gpu::ImageMetadataRaw {
             view_size,
@@ -194,16 +176,16 @@ impl ImageRenderState {
 }
 
 struct ImageDrawState {
+    /// Widget location and size as determined by iced layout.
+    ///
+    /// Needed to correct transform window to widget coordinates.
+    viewport: iced::Rectangle,
     /// Image starts at this offset from the top left corner of the viewport.
-    widget_offset: iced::Vector<f32>,
-    /// Image starts at this offset from the top left corner of the viewport.
-    image_offset: iced::Point<i32>,
+    offset: iced::Point,
+    /// Size of the image.
+    size: iced::Size,
     /// Image is scaled by this factor.
     scale: f32,
-    /// Size of the viewport where the image is shown (from the last draw).
-    viewport: iced::Size<u32>,
-    /// Size of the image.
-    image: iced::Size<u32>,
 }
 
 impl ImageDrawState {
@@ -221,13 +203,12 @@ impl ImageDrawState {
         self.set_zoom(scale, fix_point);
     }
 
-    #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     fn set_zoom(&mut self, scale: f32, fix_point: iced::Point) {
         let scale = scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
 
         // get offset in fix-point coordinates (where fix-point is the origin)
-        let x = self.image_offset.x as f32 - fix_point.x;
-        let y = self.image_offset.y as f32 - fix_point.y;
+        let x = self.offset.x - fix_point.x;
+        let y = self.offset.y - fix_point.y;
 
         // scale up offset position by actual difference of scale factor
         let factor = scale / self.scale;
@@ -238,44 +219,46 @@ impl ImageDrawState {
         let x = x + fix_point.x;
         let y = y + fix_point.y;
 
-        let offset = iced::Point::new(x as i32, y as i32);
-        self.image_offset = offset;
+        self.offset = iced::Point::new(x, y);
         self.scale = scale;
     }
 
-    fn pan(&mut self, x: i32, y: i32) {
-        self.image_offset.x += x;
-        self.image_offset.y += y;
+    fn pan(&mut self, offset: iced::Vector) {
+        self.offset += offset;
         self.clamp_offset();
     }
 
-    #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    /// Make sure that at least 10% of the viewport area shows part of the image.
     fn clamp_offset(&mut self) {
-        self.scale = self.scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
+        const FILLED_PERCENT: f32 = 0.1;
 
-        let x = self.image_offset.x as f32;
-        let y = self.image_offset.y as f32;
-        let image_width = self.image.width as f32 * self.scale;
-        let image_height = self.image.height as f32 * self.scale;
-        let view_width = self.viewport.width as f32;
-        let view_height = self.viewport.height as f32;
+        let x = self.offset.x.clamp(
+            -self.size.width + (self.viewport.width / FILLED_PERCENT),
+            self.viewport.width * (1. - FILLED_PERCENT),
+        );
+        let y = self.offset.y.clamp(
+            -self.size.height + (self.viewport.height / FILLED_PERCENT),
+            self.viewport.height * (1. - FILLED_PERCENT),
+        );
 
-        let x = x.clamp(-image_width + (view_width / 10.), view_width * 9. / 10.);
-        let y = y.clamp(-image_height + (view_height / 10.), view_height * 9. / 10.);
+        self.offset = iced::Point::new(x, y);
+    }
 
-        let offset = iced::Point::new(x as i32, y as i32);
-        self.image_offset = offset;
+    const fn widget_offset(&self) -> iced::Vector {
+        iced::Vector {
+            x: self.viewport.x,
+            y: self.viewport.y,
+        }
     }
 }
 
 impl Default for ImageDrawState {
     fn default() -> Self {
         Self {
-            widget_offset: iced::Vector::default(),
-            image_offset: iced::Point::default(),
+            viewport: iced::Rectangle::default(),
+            offset: iced::Point::default(),
+            size: iced::Size::default(),
             scale: 1.,
-            viewport: iced::Size::default(),
-            image: iced::Size::default(),
         }
     }
 }

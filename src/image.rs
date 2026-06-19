@@ -18,9 +18,12 @@ impl ImageWidget {
 
     pub fn set_image(&mut self, image: ImageLoaded, ctx: &GpuContext, target: &TargetContext) {
         let render_state = ImageRenderState::new(&image, ctx, target);
-        let draw_state = ImageDrawState::default();
+        let draw_state = ImageDrawState {
+            image: image.size(),
+            ..Default::default()
+        };
         let data = WidgetData {
-            image,
+            _image: image,
             render_state,
             draw_state,
         };
@@ -66,11 +69,11 @@ impl ImageWidget {
 
     pub fn pan(&mut self, x: i32, y: i32) {
         if let Some(data) = &mut self.data {
-            data.draw_state.pan(x, y, &data.image);
+            data.draw_state.pan(x, y);
         }
     }
 
-    pub const fn set_zoom(&mut self, scale: f32) {
+    pub fn set_zoom(&mut self, scale: f32) {
         if let Some(data) = &mut self.data {
             data.draw_state.set_zoom(scale);
         }
@@ -80,14 +83,6 @@ impl ImageWidget {
 pub struct ImageLoaded {
     image: image::RgbaImage,
     format: wgpu::TextureFormat,
-}
-
-impl std::ops::Deref for ImageLoaded {
-    type Target = image::RgbaImage;
-
-    fn deref(&self) -> &Self::Target {
-        &self.image
-    }
 }
 
 impl ImageLoaded {
@@ -103,17 +98,24 @@ impl ImageLoaded {
         Ok(Self { image, format })
     }
 
-    pub fn width(&self) -> u32 {
-        self.image.width()
+    pub fn size(&self) -> iced::Size<u32> {
+        iced::Size {
+            width: self.image.width(),
+            height: self.image.height(),
+        }
     }
+}
 
-    pub fn height(&self) -> u32 {
-        self.image.height()
+impl std::ops::Deref for ImageLoaded {
+    type Target = image::RgbaImage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.image
     }
 }
 
 struct WidgetData {
-    image: ImageLoaded,
+    _image: ImageLoaded,
     render_state: ImageRenderState,
     draw_state: ImageDrawState,
 }
@@ -182,8 +184,10 @@ struct ImageDrawState {
     offset: iced::Point<i32>,
     /// Image is scaled by this factor.
     scale: f32,
-    /// Size of the viewport where the image is shown (from the last draw)
+    /// Size of the viewport where the image is shown (from the last draw).
     viewport: iced::Size<u32>,
+    /// Size of the image.
+    image: iced::Size<u32>,
 }
 
 impl ImageDrawState {
@@ -192,35 +196,43 @@ impl ImageDrawState {
     const SCALE_MIN: f32 = 0.05;
 
     fn zoom_in(&mut self) {
-        let scale = self.scale * Self::SCALE_INCREASE_FACTOR;
-        let scale = scale.min(Self::SCALE_MAX);
-        self.scale = scale;
+        self.scale *= Self::SCALE_INCREASE_FACTOR;
+        self.clamp_values();
     }
 
     fn zoom_out(&mut self) {
-        let scale = self.scale / Self::SCALE_INCREASE_FACTOR;
-        let scale = scale.max(Self::SCALE_MIN);
-        self.scale = scale;
+        self.scale /= Self::SCALE_INCREASE_FACTOR;
+        self.clamp_values();
     }
 
-    fn pan(&mut self, x: i32, y: i32, image: &ImageLoaded) {
-        let x = self.offset.x + x;
-        let y = self.offset.y + y;
-        #[expect(clippy::cast_possible_wrap)]
-        let x = x.clamp(
-            -(image.width() as i32) + (self.viewport.width / 10) as i32,
-            (self.viewport.width * 9 / 10) as i32,
-        );
-        #[expect(clippy::cast_possible_wrap)]
-        let y = y.clamp(
-            -(image.height() as i32) + (self.viewport.height / 10) as i32,
-            (self.viewport.height * 9 / 10) as i32,
-        );
-        let offset = iced::Point::new(x, y);
-        self.offset = offset;
+    fn pan(&mut self, x: i32, y: i32) {
+        self.offset.x += x;
+        self.offset.y += y;
+        self.clamp_values();
     }
-    const fn set_zoom(&mut self, scale: f32) {
-        self.scale = scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
+
+    fn set_zoom(&mut self, scale: f32) {
+        self.scale = scale;
+        self.clamp_values();
+    }
+
+    #[expect(clippy::cast_precision_loss)]
+    fn clamp_values(&mut self) {
+        self.scale = self.scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
+
+        let x = self.offset.x as f32;
+        let y = self.offset.y as f32;
+        let image_width = self.image.width as f32 * self.scale;
+        let image_height = self.image.height as f32 * self.scale;
+        let view_width = self.viewport.width as f32;
+        let view_height = self.viewport.height as f32;
+
+        let x = x.clamp(-image_width + (view_width / 10.), view_width * 9. / 10.);
+        let y = y.clamp(-image_height + (view_height / 10.), view_height * 9. / 10.);
+
+        #[expect(clippy::cast_possible_truncation)]
+        let offset = iced::Point::new(x as i32, y as i32);
+        self.offset = offset;
     }
 }
 
@@ -230,6 +242,10 @@ impl Default for ImageDrawState {
             offset: iced::Point::new(0, 0),
             scale: 1.,
             viewport: iced::Size {
+                width: 0,
+                height: 0,
+            },
+            image: iced::Size {
                 width: 0,
                 height: 0,
             },

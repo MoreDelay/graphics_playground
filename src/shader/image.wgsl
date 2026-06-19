@@ -46,19 +46,15 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VSOutput {
 
 @fragment
 fn fs_main(in: VSOutput) -> @location(0) vec4<f32> {
-    // var uv: vec2<f32> = in.uv;
-    // let view_aspect = metadata.view_size.x / metadata.view_size.y;
-    // let image_aspect = metadata.image_size.x / metadata.image_size.y;
-    //
-    // if image_aspect >= view_aspect {
-    //     uv.y = uv.y / view_aspect * image_aspect;
-    // } else {
-    //     uv.x = uv.x / image_aspect * view_aspect;
-    // }
-    let uv = ((in.uv * metadata.view_size - metadata.start) / metadata.scale) / metadata.image_size;
+    let viewport_uv = in.uv;
+    let viewport_pos = viewport_uv * metadata.view_size;
+    let image_pos = (viewport_pos - metadata.start) / metadata.scale;
+    let image_uv = image_pos / metadata.image_size;
 
-    let inside = 0. <= uv.x && uv.x <= 1. && 0. <= uv.y && uv.y <= 1.;
+    let inside = (0. <= image_uv.x && image_uv.x <= 1.)
+                 && (0. <= image_uv.y && image_uv.y <= 1.);
     if !inside { discard; }
-    let color = textureSample(t_image, s_image, uv);
+
+    let color = textureSample(t_image, s_image, image_uv);
     return color;
 }

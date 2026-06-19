@@ -43,39 +43,53 @@ impl ImageWidget {
                 width,
                 height,
             } = viewport;
+            let widget_offset = iced::Vector { x, y };
             #[expect(clippy::cast_possible_truncation)]
             let size = iced::Size {
                 width: (width - x.fract()).ceil() as u32,
                 height: (height - y.fract()).ceil() as u32,
             };
 
+            data.draw_state.widget_offset = widget_offset;
             data.draw_state.viewport = size;
             data.render_state
                 .draw(ctx, render_pass, viewport, &data.draw_state);
         }
     }
 
-    pub fn zoom_in(&mut self) {
+    pub fn zoom_in(&mut self, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
-            data.draw_state.zoom_in();
+            let fix_point = match fix_point {
+                Some(p) => p - data.draw_state.widget_offset,
+                None => iced::Point::default(),
+            };
+            data.draw_state.zoom_in(fix_point);
         }
     }
 
-    pub fn zoom_out(&mut self) {
+    pub fn zoom_out(&mut self, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
-            data.draw_state.zoom_out();
+            let fix_point = match fix_point {
+                Some(p) => p - data.draw_state.widget_offset,
+                None => iced::Point::default(),
+            };
+            data.draw_state.zoom_out(fix_point);
+        }
+    }
+
+    pub fn set_zoom(&mut self, scale: f32, fix_point: Option<iced::Point>) {
+        if let Some(data) = &mut self.data {
+            let fix_point = match fix_point {
+                Some(p) => p - data.draw_state.widget_offset,
+                None => iced::Point::default(),
+            };
+            data.draw_state.set_zoom(scale, fix_point);
         }
     }
 
     pub fn pan(&mut self, x: i32, y: i32) {
         if let Some(data) = &mut self.data {
             data.draw_state.pan(x, y);
-        }
-    }
-
-    pub fn set_zoom(&mut self, scale: f32) {
-        if let Some(data) = &mut self.data {
-            data.draw_state.set_zoom(scale);
         }
     }
 }
@@ -160,7 +174,7 @@ impl ImageRenderState {
             [width as f32, height as f32]
         };
         #[expect(clippy::cast_precision_loss)]
-        let start = [options.offset.x as f32, options.offset.y as f32];
+        let start = [options.image_offset.x as f32, options.image_offset.y as f32];
         let scale = options.scale;
 
         let raw = gpu::ImageMetadataRaw {
@@ -181,7 +195,9 @@ impl ImageRenderState {
 
 struct ImageDrawState {
     /// Image starts at this offset from the top left corner of the viewport.
-    offset: iced::Point<i32>,
+    widget_offset: iced::Vector<f32>,
+    /// Image starts at this offset from the top left corner of the viewport.
+    image_offset: iced::Point<i32>,
     /// Image is scaled by this factor.
     scale: f32,
     /// Size of the viewport where the image is shown (from the last draw).
@@ -191,37 +207,54 @@ struct ImageDrawState {
 }
 
 impl ImageDrawState {
-    const SCALE_INCREASE_FACTOR: f32 = 1.1;
+    const SCALE_INCREASE_FACTOR: f32 = 1.2;
     const SCALE_MAX: f32 = 15.0;
     const SCALE_MIN: f32 = 0.05;
 
-    fn zoom_in(&mut self) {
-        self.scale *= Self::SCALE_INCREASE_FACTOR;
-        self.clamp_values();
+    fn zoom_in(&mut self, fix_point: iced::Point) {
+        let scale = self.scale * Self::SCALE_INCREASE_FACTOR;
+        self.set_zoom(scale, fix_point);
     }
 
-    fn zoom_out(&mut self) {
-        self.scale /= Self::SCALE_INCREASE_FACTOR;
-        self.clamp_values();
+    fn zoom_out(&mut self, fix_point: iced::Point) {
+        let scale = self.scale / Self::SCALE_INCREASE_FACTOR;
+        self.set_zoom(scale, fix_point);
+    }
+
+    #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn set_zoom(&mut self, scale: f32, fix_point: iced::Point) {
+        let scale = scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
+
+        // get offset in fix-point coordinates (where fix-point is the origin)
+        let x = self.image_offset.x as f32 - fix_point.x;
+        let y = self.image_offset.y as f32 - fix_point.y;
+
+        // scale up offset position by actual difference of scale factor
+        let factor = scale / self.scale;
+        let x = x * factor;
+        let y = y * factor;
+
+        // return back to viewport coordinates
+        let x = x + fix_point.x;
+        let y = y + fix_point.y;
+
+        let offset = iced::Point::new(x as i32, y as i32);
+        self.image_offset = offset;
+        self.scale = scale;
     }
 
     fn pan(&mut self, x: i32, y: i32) {
-        self.offset.x += x;
-        self.offset.y += y;
-        self.clamp_values();
+        self.image_offset.x += x;
+        self.image_offset.y += y;
+        self.clamp_offset();
     }
 
-    fn set_zoom(&mut self, scale: f32) {
-        self.scale = scale;
-        self.clamp_values();
-    }
-
-    #[expect(clippy::cast_precision_loss)]
-    fn clamp_values(&mut self) {
+    #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn clamp_offset(&mut self) {
         self.scale = self.scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
 
-        let x = self.offset.x as f32;
-        let y = self.offset.y as f32;
+        let x = self.image_offset.x as f32;
+        let y = self.image_offset.y as f32;
         let image_width = self.image.width as f32 * self.scale;
         let image_height = self.image.height as f32 * self.scale;
         let view_width = self.viewport.width as f32;
@@ -230,25 +263,19 @@ impl ImageDrawState {
         let x = x.clamp(-image_width + (view_width / 10.), view_width * 9. / 10.);
         let y = y.clamp(-image_height + (view_height / 10.), view_height * 9. / 10.);
 
-        #[expect(clippy::cast_possible_truncation)]
         let offset = iced::Point::new(x as i32, y as i32);
-        self.offset = offset;
+        self.image_offset = offset;
     }
 }
 
 impl Default for ImageDrawState {
     fn default() -> Self {
         Self {
-            offset: iced::Point::new(0, 0),
+            widget_offset: iced::Vector::default(),
+            image_offset: iced::Point::default(),
             scale: 1.,
-            viewport: iced::Size {
-                width: 0,
-                height: 0,
-            },
-            image: iced::Size {
-                width: 0,
-                height: 0,
-            },
+            viewport: iced::Size::default(),
+            image: iced::Size::default(),
         }
     }
 }

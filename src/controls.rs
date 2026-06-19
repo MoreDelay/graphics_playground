@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
+use iced::advanced::mouse::Cursor;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
@@ -71,7 +72,13 @@ impl Controls {
         .into()
     }
 
-    pub fn update(&mut self, message: Message, ctx: &GpuContext, target: &TargetContext) {
+    pub fn update(
+        &mut self,
+        message: Message,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        cursor: &Cursor,
+    ) {
         match (&mut self.scene, message) {
             (CurrentScene::Scene(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
@@ -93,16 +100,19 @@ impl Controls {
                 self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
-                widget.zoom_in();
+                let fix_point = cursor.position();
+                widget.zoom_in(fix_point);
             }
             (CurrentScene::Image(widget), Message::ScrollDown) => {
-                widget.zoom_out();
+                let fix_point = cursor.position();
+                widget.zoom_out(fix_point);
+            }
+            (CurrentScene::Image(widget), Message::SetZoom(scale)) => {
+                let fix_point = cursor.position();
+                widget.set_zoom(scale, fix_point);
             }
             (CurrentScene::Image(widget), Message::Drag { x, y }) => {
                 widget.pan(x, y);
-            }
-            (CurrentScene::Image(widget), Message::SetZoom(scale)) => {
-                widget.set_zoom(scale);
             }
         }
     }

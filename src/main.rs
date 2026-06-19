@@ -146,7 +146,7 @@ impl winit::application::ApplicationHandler for Runner {
             for message in messages {
                 ready
                     .controls
-                    .update(message, &ready.gpu_ctx, &ready.target_ctx);
+                    .update(message, &ready.gpu_ctx, &ready.target_ctx, &ready.cursor);
             }
 
             // and request a redraw
@@ -397,7 +397,7 @@ impl Ready {
             accumulated.y = accumulated.y.fract();
 
             self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx);
+                .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
         }
     }
 
@@ -427,7 +427,7 @@ impl Ready {
         };
         if let Some(message) = message {
             self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx);
+                .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
         }
     }
 
@@ -440,7 +440,7 @@ impl Ready {
         };
         if let Some(message) = message {
             self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx);
+                .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
         }
     }
 

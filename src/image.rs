@@ -221,6 +221,9 @@ impl ImageDrawState {
 
         self.offset = iced::Point::new(x, y);
         self.scale = scale;
+
+        // when the image is at the border, it might move out of frame by zooming
+        self.clamp_offset();
     }
 
     fn pan(&mut self, offset: iced::Vector) {
@@ -232,14 +235,19 @@ impl ImageDrawState {
     fn clamp_offset(&mut self) {
         const FILLED_PERCENT: f32 = 0.1;
 
-        let x = self.offset.x.clamp(
-            -self.size.width + (self.viewport.width / FILLED_PERCENT),
-            self.viewport.width * (1. - FILLED_PERCENT),
-        );
-        let y = self.offset.y.clamp(
-            -self.size.height + (self.viewport.height / FILLED_PERCENT),
-            self.viewport.height * (1. - FILLED_PERCENT),
-        );
+        let x_min = self
+            .viewport
+            .width
+            .mul_add(FILLED_PERCENT, -self.scale * self.size.width);
+        let x_max = self.viewport.width * (1. - FILLED_PERCENT);
+        let x = self.offset.x.clamp(x_min, x_max);
+
+        let y_min = self
+            .viewport
+            .height
+            .mul_add(FILLED_PERCENT, -self.scale * self.size.height);
+        let y_max = self.viewport.height * (1. - FILLED_PERCENT);
+        let y = self.offset.y.clamp(y_min, y_max);
 
         self.offset = iced::Point::new(x, y);
     }

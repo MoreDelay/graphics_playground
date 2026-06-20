@@ -3,11 +3,12 @@ mod gpu;
 use std::path::Path;
 
 use iced::wgpu;
+use iced_winit::winit::keyboard::KeyCode;
 
 use crate::{GpuContext, TargetContext};
 
 pub struct ImageWidget {
-    data: Option<WidgetData>,
+    data: Option<WidgetState>,
 }
 
 impl ImageWidget {
@@ -17,7 +18,8 @@ impl ImageWidget {
     }
 
     pub fn set_image(&mut self, image: ImageLoaded, ctx: &GpuContext, target: &TargetContext) {
-        let render_state = ImageRenderState::new(&image, ctx, target);
+        let features = gpu::ImagePipelineFeatures::default();
+        let render_state = ImageRenderState::new(&image, ctx, target, features);
 
         #[expect(clippy::cast_precision_loss)]
         let size = iced::Size {
@@ -28,7 +30,7 @@ impl ImageWidget {
             size,
             ..Default::default()
         };
-        let data = WidgetData {
+        let data = WidgetState {
             _image: image,
             render_state,
             draw_state,
@@ -43,44 +45,53 @@ impl ImageWidget {
         viewport: iced::Rectangle,
     ) {
         if let Some(data) = &mut self.data {
-            data.draw_state.viewport = viewport;
-            data.render_state.draw(ctx, render_pass, &data.draw_state);
+            data.draw(ctx, render_pass, viewport);
         }
     }
 
     pub fn zoom_in(&mut self, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
-            let fix_point = match fix_point {
-                Some(p) => p - data.draw_state.widget_offset(),
-                None => iced::Point::default(),
-            };
-            data.draw_state.zoom_in(fix_point);
+            data.zoom_in(fix_point);
         }
     }
 
     pub fn zoom_out(&mut self, fix_point: Option<iced::Point>) {
         if let Some(data) = &mut self.data {
-            let fix_point = match fix_point {
-                Some(p) => p - data.draw_state.widget_offset(),
-                None => iced::Point::default(),
-            };
-            data.draw_state.zoom_out(fix_point);
-        }
-    }
-
-    pub fn set_zoom(&mut self, scale: f32, fix_point: Option<iced::Point>) {
-        if let Some(data) = &mut self.data {
-            let fix_point = match fix_point {
-                Some(p) => p - data.draw_state.widget_offset(),
-                None => iced::Point::default(),
-            };
-            data.draw_state.set_zoom(scale, fix_point);
+            data.zoom_out(fix_point);
         }
     }
 
     pub fn pan(&mut self, offset: iced::Vector) {
         if let Some(data) = &mut self.data {
-            data.draw_state.pan(offset);
+            data.pan(offset);
+        }
+    }
+
+    pub fn update(&mut self, message: ImageMessage, cursor: Option<iced::Point>) {
+        if let Some(data) = &mut self.data {
+            data.update(message, cursor);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ImageMessage {
+    SetZoom(f32),
+    ResetPosition,
+    CycleFilters,
+}
+
+impl TryFrom<KeyCode> for ImageMessage {
+    type Error = ();
+
+    fn try_from(value: KeyCode) -> Result<Self, Self::Error> {
+        #[expect(clippy::wildcard_enum_match_arm)]
+        match value {
+            KeyCode::Digit1 => Ok(Self::SetZoom(1.)),
+            KeyCode::Digit2 => Ok(Self::SetZoom(2.)),
+            KeyCode::KeyS => Ok(Self::ResetPosition),
+            KeyCode::KeyF => Ok(Self::CycleFilters),
+            _ => Err(()),
         }
     }
 }
@@ -112,36 +123,97 @@ impl std::ops::Deref for ImageLoaded {
     }
 }
 
-struct WidgetData {
+struct WidgetState {
     _image: ImageLoaded,
     render_state: ImageRenderState,
     draw_state: ImageDrawState,
 }
 
+impl WidgetState {
+    pub fn draw(
+        &mut self,
+        ctx: &GpuContext,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        viewport: iced::Rectangle,
+    ) {
+        self.draw_state.viewport = viewport;
+        let features = self.draw_state.pipeline_features();
+        self.render_state.update_pipeline(ctx, features);
+        self.render_state.draw(ctx, render_pass, &self.draw_state);
+    }
+
+    pub fn zoom_in(&mut self, cursor: Option<iced::Point>) {
+        let cursor = self.draw_state.widget_pos(cursor);
+        self.draw_state.zoom_in(cursor);
+    }
+
+    pub fn zoom_out(&mut self, cursor: Option<iced::Point>) {
+        let cursor = self.draw_state.widget_pos(cursor);
+        self.draw_state.zoom_out(cursor);
+    }
+
+    pub fn pan(&mut self, offset: iced::Vector) {
+        self.draw_state.pan(offset);
+    }
+
+    pub fn update(&mut self, message: ImageMessage, cursor: Option<iced::Point>) {
+        match message {
+            ImageMessage::SetZoom(scale) => {
+                let cursor = self.draw_state.widget_pos(cursor);
+                self.draw_state.set_zoom(scale, cursor);
+            }
+            ImageMessage::ResetPosition => self.draw_state.reset_pos(),
+            ImageMessage::CycleFilters => self.draw_state.cycle_filters(),
+        }
+    }
+}
+
 struct ImageRenderState {
     image: gpu::ImageUploaded,
-    _texture_layout: gpu::TextureBindGroupLayout,
-    _meta_layout: gpu::ImageMetadataBindGroupLayout,
+    texture_layout: gpu::TextureBindGroupLayout,
+    meta_layout: gpu::ImageMetadataBindGroupLayout,
     meta_bind: gpu::ImageMetadataBinding,
     pipeline: gpu::ImagePipeline,
 }
 
 impl ImageRenderState {
-    fn new(image: &ImageLoaded, ctx: &GpuContext, target: &TargetContext) -> Self {
+    fn new(
+        image: &ImageLoaded,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        features: gpu::ImagePipelineFeatures,
+    ) -> Self {
         let meta_layout = gpu::ImageMetadataBindGroupLayout::new(ctx);
         let meta_bind = gpu::ImageMetadataBinding::for_image(image, ctx, &meta_layout);
 
         let texture_layout = gpu::TextureBindGroupLayout::new(ctx);
         let image = gpu::ImageUploaded::upload(image, ctx, &texture_layout);
 
-        let pipeline = gpu::ImagePipeline::new(ctx, target, &texture_layout, &meta_layout);
+        let format = target.config.format;
+        let pipeline =
+            gpu::ImagePipeline::new(ctx, format, &texture_layout, &meta_layout, features);
         Self {
             image,
-            _texture_layout: texture_layout,
-            _meta_layout: meta_layout,
+            texture_layout,
+            meta_layout,
             meta_bind,
             pipeline,
         }
+    }
+
+    fn update_pipeline(&mut self, ctx: &GpuContext, features: gpu::ImagePipelineFeatures) {
+        if self.pipeline.features() == features {
+            return;
+        }
+
+        let out_format = self.pipeline.output_format();
+        self.pipeline = gpu::ImagePipeline::new(
+            ctx,
+            out_format,
+            &self.texture_layout,
+            &self.meta_layout,
+            features,
+        );
     }
 
     fn draw(
@@ -186,6 +258,10 @@ struct ImageDrawState {
     size: iced::Size,
     /// Image is scaled by this factor.
     scale: f32,
+    /// The image filter that should be applied
+    ///
+    /// Currently does not differentiate between magnification and minification.
+    filter: gpu::ImageFilter,
 }
 
 impl ImageDrawState {
@@ -193,17 +269,17 @@ impl ImageDrawState {
     const SCALE_MAX: f32 = 15.0;
     const SCALE_MIN: f32 = 0.05;
 
-    fn zoom_in(&mut self, fix_point: iced::Point) {
+    fn zoom_in(&mut self, fix_point: WidgetPos) {
         let scale = self.scale * Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(scale, fix_point);
     }
 
-    fn zoom_out(&mut self, fix_point: iced::Point) {
+    fn zoom_out(&mut self, fix_point: WidgetPos) {
         let scale = self.scale / Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(scale, fix_point);
     }
 
-    fn set_zoom(&mut self, scale: f32, fix_point: iced::Point) {
+    fn set_zoom(&mut self, scale: f32, fix_point: WidgetPos) {
         let scale = scale.clamp(Self::SCALE_MIN, Self::SCALE_MAX);
 
         // get offset in fix-point coordinates (where fix-point is the origin)
@@ -231,6 +307,19 @@ impl ImageDrawState {
         self.clamp_offset();
     }
 
+    fn reset_pos(&mut self) {
+        self.offset = iced::Point::default();
+        // self.clamp_offset();
+    }
+
+    fn cycle_filters(&mut self) {
+        self.filter = match self.filter {
+            gpu::ImageFilter::BiLinear => gpu::ImageFilter::Nearest,
+            gpu::ImageFilter::Nearest => gpu::ImageFilter::BiLinear,
+        };
+        println!("Filter: {:?}", self.filter);
+    }
+
     /// Make sure that at least 10% of the viewport area shows part of the image.
     fn clamp_offset(&mut self) {
         const FILLED_PERCENT: f32 = 0.1;
@@ -252,11 +341,26 @@ impl ImageDrawState {
         self.offset = iced::Point::new(x, y);
     }
 
-    const fn widget_offset(&self) -> iced::Vector {
-        iced::Vector {
+    fn widget_pos(&self, cursor: Option<iced::Point>) -> WidgetPos {
+        let offset = iced::Vector {
             x: self.viewport.x,
             y: self.viewport.y,
+        };
+        let pos = cursor.map(|p| p - offset).unwrap_or_default();
+        WidgetPos(pos)
+    }
+
+    fn pipeline_features(&self) -> gpu::ImagePipelineFeatures {
+        let filter = self.filter;
+        let mut features = gpu::ImagePipelineFeatures { filter };
+
+        #[expect(clippy::float_cmp)]
+        if self.scale == 1. {
+            // When we have 100% zoom, we don't need to filter anything, as every output pixel
+            // exists of exactly one texel. Disable filtering to prevent any sort of inaccuracies.
+            features.filter = gpu::ImageFilter::Nearest;
         }
+        features
     }
 }
 
@@ -267,6 +371,18 @@ impl Default for ImageDrawState {
             offset: iced::Point::default(),
             size: iced::Size::default(),
             scale: 1.,
+            filter: gpu::ImageFilter::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WidgetPos(iced::Point);
+
+impl std::ops::Deref for WidgetPos {
+    type Target = iced::Point;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

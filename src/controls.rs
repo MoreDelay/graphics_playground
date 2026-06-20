@@ -7,6 +7,7 @@ use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit;
+use iced_winit::winit::keyboard::KeyCode;
 
 use crate::image::{ImageLoaded, ImageWidget};
 use crate::scene::RenderWidget;
@@ -27,7 +28,7 @@ pub enum Message {
     ScrollUp,
     ScrollDown,
     Drag(iced::Vector),
-    SetZoom(f32),
+    KeyPress(KeyCode),
 }
 
 impl Controls {
@@ -90,7 +91,7 @@ impl Controls {
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
             (CurrentScene::Scene(_), Message::Drag { .. }) => (),
-            (CurrentScene::Scene(_), Message::SetZoom(..)) => (),
+            (CurrentScene::Scene(_), Message::KeyPress(..)) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::scene(ctx, target);
@@ -107,12 +108,14 @@ impl Controls {
                 let fix_point = cursor.position();
                 widget.zoom_out(fix_point);
             }
-            (CurrentScene::Image(widget), Message::SetZoom(scale)) => {
-                let fix_point = cursor.position();
-                widget.set_zoom(scale, fix_point);
-            }
             (CurrentScene::Image(widget), Message::Drag(offset)) => {
                 widget.pan(offset);
+            }
+            (CurrentScene::Image(widget), Message::KeyPress(key)) => {
+                let Ok(message) = key.try_into() else {
+                    return;
+                };
+                widget.update(message, cursor.position());
             }
         }
     }

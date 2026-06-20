@@ -36,32 +36,6 @@ pub fn main() -> Result<(), EventLoopError> {
     event_loop.run_app(&mut runner)
 }
 
-struct GpuContext {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
-
-struct TargetContext {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-}
-
-struct Ready {
-    window: Arc<Window>,
-    gpu_ctx: GpuContext,
-    target_ctx: TargetContext,
-    renderer: Renderer,
-    controls: Controls,
-    events: Vec<Event>,
-    cursor: Cursor,
-    dragging: DraggingState,
-    cache: Cache,
-    clipboard: Clipboard,
-    viewport: Viewport,
-    modifiers: ModifiersState,
-    resized: bool,
-}
-
 #[expect(clippy::large_enum_variant)]
 enum Runner {
     Loading,
@@ -99,16 +73,20 @@ impl winit::application::ApplicationHandler for Runner {
             WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changed(modifiers),
             WindowEvent::Resized(_) => ready.resized(),
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::KeyboardInput { ref event, .. } => {
-                let KeyEvent { physical_key, .. } = event;
-                match physical_key {
-                    PhysicalKey::Code(KeyCode::KeyQ) if ready.modifiers.control_key() => {
-                        event_loop.exit();
-                    }
-                    PhysicalKey::Code(key) => ready.key_pressed(*key),
-                    PhysicalKey::Unidentified(_) => (),
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(key),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => match key {
+                KeyCode::KeyQ if ready.modifiers.control_key() => {
+                    event_loop.exit();
                 }
-            }
+                key => ready.key_pressed(key),
+            },
             _ => {}
         }
 
@@ -153,6 +131,22 @@ impl winit::application::ApplicationHandler for Runner {
             ready.window.request_redraw();
         }
     }
+}
+
+struct Ready {
+    window: Arc<Window>,
+    gpu_ctx: GpuContext,
+    target_ctx: TargetContext,
+    renderer: Renderer,
+    controls: Controls,
+    events: Vec<Event>,
+    cursor: Cursor,
+    dragging: DraggingState,
+    cache: Cache,
+    clipboard: Clipboard,
+    viewport: Viewport,
+    modifiers: ModifiersState,
+    resized: bool,
 }
 
 impl Ready {
@@ -420,16 +414,9 @@ impl Ready {
     }
 
     fn key_pressed(&mut self, key: KeyCode) {
-        #[expect(clippy::wildcard_enum_match_arm)]
-        let message = match key {
-            KeyCode::Digit1 => Some(Message::SetZoom(1.)),
-            KeyCode::Digit2 => Some(Message::SetZoom(2.)),
-            _ => None,
-        };
-        if let Some(message) = message {
-            self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
-        }
+        let message = Message::KeyPress(key);
+        self.controls
+            .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
     }
 
     fn modifiers_changed(&mut self, modifiers: Modifiers) {
@@ -439,6 +426,16 @@ impl Ready {
     const fn resized(&mut self) {
         self.resized = true;
     }
+}
+
+struct GpuContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+struct TargetContext {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

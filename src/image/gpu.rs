@@ -4,12 +4,39 @@ use iced::wgpu;
 use iced::wgpu::util::DeviceExt as _;
 
 use super::ImageLoaded;
-use crate::{GpuContext, TargetContext};
+use crate::GpuContext;
 
 const SHADER_ROOT: &str = "src/shader";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageFilter {
+    BiLinear,
+    #[default]
+    Nearest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImagePipelineFeatures {
+    pub filter: ImageFilter,
+}
+
+impl ImagePipelineFeatures {
+    fn into_iter(self) -> impl Iterator<Item = (&'static str, bool)> {
+        let mut features = vec![];
+
+        match self.filter {
+            ImageFilter::BiLinear => features.push(("FILTER_BILINEAR", true)),
+            ImageFilter::Nearest => (),
+        }
+
+        features.into_iter()
+    }
+}
+
 pub struct ImagePipeline {
     pipeline: wgpu::RenderPipeline,
+    features: ImagePipelineFeatures,
+    output_format: wgpu::TextureFormat,
 }
 
 impl ImagePipeline {
@@ -17,12 +44,14 @@ impl ImagePipeline {
 
     pub fn new(
         ctx: &GpuContext,
-        target: &TargetContext,
+        output_format: wgpu::TextureFormat,
         texture_layout: &TextureBindGroupLayout,
         meta_layout: &ImageMetadataBindGroupLayout,
+        features: ImagePipelineFeatures,
     ) -> Self {
         let shader_module = &Self::SHADER.parse().expect("module path invalid");
         let shader_module = wesl::Wesl::new(SHADER_ROOT)
+            .set_features(features.into_iter())
             .compile(shader_module)
             .inspect_err(|e| eprintln!("WESL error: {e}"))
             .expect("shader invalid")
@@ -56,7 +85,7 @@ impl ImagePipeline {
                     module: &shader_module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: target.config.format,
+                        format: output_format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -77,7 +106,19 @@ impl ImagePipeline {
                 cache: None,
             });
 
-        Self { pipeline }
+        Self {
+            pipeline,
+            features,
+            output_format,
+        }
+    }
+
+    pub const fn output_format(&self) -> wgpu::TextureFormat {
+        self.output_format
+    }
+
+    pub const fn features(&self) -> ImagePipelineFeatures {
+        self.features
     }
 }
 

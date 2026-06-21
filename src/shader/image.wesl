@@ -3,9 +3,8 @@ struct VSOutput {
     @location(0) uv: vec2<f32>,
 };
 
-struct ImageMetadata {
+struct ViewInfo {
     view_size: vec2<f32>,
-    image_size: vec2<f32>,
     start: vec2<f32>,
     scale: f32,
 }
@@ -16,7 +15,7 @@ var t_image: texture_2d<f32>;
 var s_image: sampler;
 
 @group(1) @binding(0)
-var<uniform> image_md: ImageMetadata;
+var<uniform> view_info: ViewInfo;
 
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VSOutput {
@@ -57,8 +56,10 @@ fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
 }
 
 fn sample_at(pos: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<f32>(textureDimensions(t_image));
+
     let center = pos + vec2(0.5, 0.5);
-    let uv = center / image_md.image_size;
+    let uv = center / dims;
 
     let inside = (0. <= uv.x && uv.x <= 1.)
               && (0. <= uv.y && uv.y <= 1.);
@@ -85,8 +86,8 @@ fn filter_nearest(pos: vec2<f32>) -> vec4<f32> {
 @fragment
 fn fs_main(in: VSOutput) -> @location(0) vec4<f32> {
     let viewport_uv = in.uv;
-    let viewport_pos = viewport_uv * image_md.view_size;
-    let image_pos = (viewport_pos - image_md.start) / image_md.scale;
+    let viewport_pos = viewport_uv * view_info.view_size;
+    let image_pos = (viewport_pos - view_info.start) / view_info.scale;
 
     @if(FILTER_BILINEAR)
     let color = filter_bilinear(image_pos);

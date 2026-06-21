@@ -223,17 +223,11 @@ impl ImageRenderState {
         state: &ImageDrawState,
     ) {
         let view_size = [state.viewport.width, state.viewport.height];
-        let image_size = {
-            let wgpu::Extent3d { width, height, .. } = self.image.size();
-            #[expect(clippy::cast_precision_loss)]
-            [width as f32, height as f32]
-        };
         let start = [state.offset.x, state.offset.y];
         let scale = state.scale;
 
         let raw = gpu::ImageMetadataRaw {
             view_size,
-            image_size,
             start,
             scale,
             _pad: 0,

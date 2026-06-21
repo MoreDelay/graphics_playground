@@ -132,13 +132,6 @@ impl std::ops::Deref for ImagePipeline {
 
 pub struct ImageUploaded {
     texture: Texture,
-    size: wgpu::Extent3d,
-}
-
-impl ImageUploaded {
-    pub const fn size(&self) -> wgpu::Extent3d {
-        self.size
-    }
 }
 
 impl std::ops::Deref for ImageUploaded {
@@ -224,7 +217,7 @@ impl ImageUploaded {
             bind_group,
         };
 
-        Self { texture, size }
+        Self { texture }
     }
 }
 
@@ -255,7 +248,6 @@ impl ImageMetadataBinding {
         #[expect(clippy::cast_precision_loss)]
         let data = ImageMetadataRaw {
             view_size: [image.width() as f32, image.height() as f32],
-            image_size: [image.width() as f32, image.height() as f32],
             start: [0., 0.],
             scale: 1.,
             _pad: 0,
@@ -374,8 +366,6 @@ impl std::ops::Deref for ImageMetadataBindGroupLayout {
 pub struct ImageMetadataRaw {
     /// (width, height) of the whole image
     pub view_size: [f32; 2],
-    /// (x, y) of the top left corner
-    pub image_size: [f32; 2],
     /// (width, height) of the visible area
     pub start: [f32; 2],
     /// scale of image

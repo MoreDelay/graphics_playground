@@ -260,7 +260,7 @@ struct ImageDrawState {
 
 impl ImageDrawState {
     const SCALE_INCREASE_FACTOR: f32 = 1.2;
-    const SCALE_MAX: f32 = 15.0;
+    const SCALE_MAX: f32 = 100.0;
     const SCALE_MIN: f32 = 0.05;
 
     fn zoom_in(&mut self, fix_point: WidgetPos) {

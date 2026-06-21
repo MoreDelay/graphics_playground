@@ -55,32 +55,33 @@ fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
     return mat2x2(left, right);
 }
 
-fn sample_at(pos: vec2<f32>) -> vec4<f32> {
-    let dims = vec2<f32>(textureDimensions(t_image));
+// Use integer coords as otherwise some pixels are jumping on large images due to floating point errors.
+fn sample_at(coords: vec2<i32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t_image));
 
-    let center = pos + vec2(0.5, 0.5);
-    let uv = center / dims;
-
-    let inside = (0. <= uv.x && uv.x <= 1.)
-              && (0. <= uv.y && uv.y <= 1.);
+    let inside = (0 <= coords.x && coords.x < dims.x)
+              && (0 <= coords.y && coords.y < dims.y);
     if !inside { discard; }
 
-    let sample = textureSample(t_image, s_image, uv);
+    let sample = textureLoad(t_image, coords, 0);
     return sample;
 }
 
-fn filter_bilinear(pos: vec2<f32>) -> vec4<f32> {
+fn filter_bilinear(pos_corner: vec2<f32>) -> vec4<f32> {
+    // Lerp assumes a sampled light is at a infinitesimal point.
+    // Move this point to the center of the pixel.
+    let pos = pos_corner - vec2(0.5, 0.5);
     let weights = bilinear_weights(fract(pos));
-    let grid_pos = floor(pos);
-    let lerp = weights[0][0] * sample_at(grid_pos + vec2(0., 0.))
-             + weights[0][1] * sample_at(grid_pos + vec2(0., 1.))
-             + weights[1][0] * sample_at(grid_pos + vec2(1., 0.))
-             + weights[1][1] * sample_at(grid_pos + vec2(1., 1.));
+    let grid_pos = vec2<i32>(floor(pos));
+    let lerp = weights[0][0] * sample_at(grid_pos + vec2(0, 0))
+             + weights[0][1] * sample_at(grid_pos + vec2(0, 1))
+             + weights[1][0] * sample_at(grid_pos + vec2(1, 0))
+             + weights[1][1] * sample_at(grid_pos + vec2(1, 1));
     return lerp;
 }
 
 fn filter_nearest(pos: vec2<f32>) -> vec4<f32> {
-    return sample_at(pos);
+    return sample_at(vec2<i32>(floor(pos)));
 }
 
 @fragment

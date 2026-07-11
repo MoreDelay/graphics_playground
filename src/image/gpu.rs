@@ -1,3 +1,5 @@
+mod mipmap;
+
 use std::num::NonZeroU64;
 
 use iced::wgpu;
@@ -149,14 +151,18 @@ impl ImageUploaded {
             height: image.height(),
             depth_or_array_layers: 1,
         };
+
+        let mip_level_count = size.width.min(size.height).ilog2() + 1;
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("image texture"),
             size,
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: image.format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
             // specified format above supported by default, only additional view formats here
             view_formats: &[],
         });
@@ -183,6 +189,9 @@ impl ImageUploaded {
             },
             size,
         );
+
+        let mipmapper = mipmap::MipMapper::new(ctx);
+        mipmapper.compute_mipmaps(ctx, &texture);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {

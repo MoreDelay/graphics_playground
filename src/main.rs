@@ -92,7 +92,7 @@ impl winit::application::ApplicationHandler for Runner {
 
         // Map window event to iced event
         #[expect(clippy::cast_possible_truncation)]
-        let scale_factor = ready.window.scale_factor() as f32;
+        let scale_factor = ready.target_ctx.window.scale_factor() as f32;
         if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
             ready.events.push(event);
         }
@@ -128,13 +128,12 @@ impl winit::application::ApplicationHandler for Runner {
             }
 
             // and request a redraw
-            ready.window.request_redraw();
+            ready.target_ctx.window.request_redraw();
         }
     }
 }
 
 struct Ready {
-    window: Arc<Window>,
     gpu_ctx: GpuContext,
     target_ctx: TargetContext,
     renderer: Renderer,
@@ -215,6 +214,7 @@ impl Ready {
 
         let gpu_ctx = GpuContext { device, queue };
         let target_ctx = TargetContext {
+            window: Arc::clone(&window),
             surface,
             config: surface_config,
         };
@@ -229,7 +229,7 @@ impl Ready {
             iced::Size::new(physical_size.width, physical_size.height),
             scale_factor,
         );
-        let clipboard = Clipboard::connect(Arc::clone(&window));
+        let clipboard = Clipboard::connect(window);
 
         let engine = Engine::new(
             &adapter,
@@ -244,7 +244,6 @@ impl Ready {
         // You should change this if you want to render continuously
         event_loop.set_control_flow(ControlFlow::Wait);
         Self {
-            window,
             gpu_ctx,
             target_ctx,
             renderer,
@@ -276,7 +275,7 @@ impl Ready {
 
                 warn!("Error while drawing, try again next frame: {error}");
                 // Try rendering again next frame.
-                self.window.request_redraw();
+                self.target_ctx.window.request_redraw();
                 return;
             }
         };
@@ -310,10 +309,10 @@ impl Ready {
         {
             // Update the mouse cursor
             if let Some(icon) = iced_winit::conversion::mouse_interaction(mouse_interaction) {
-                self.window.set_cursor(icon);
-                self.window.set_cursor_visible(true);
+                self.target_ctx.window.set_cursor(icon);
+                self.target_ctx.window.set_cursor_visible(true);
             } else {
-                self.window.set_cursor_visible(false);
+                self.target_ctx.window.set_cursor_visible(false);
             }
         }
 
@@ -345,7 +344,9 @@ impl Ready {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        self.controls.draw_wgpu(&self.gpu_ctx, &view, &mut encoder);
+        let scale_factor = self.target_ctx.window.scale_factor();
+        self.controls
+            .draw_wgpu(&self.gpu_ctx, &view, &mut encoder, scale_factor);
 
         // Submit the scene
         self.gpu_ctx.queue.submit([encoder.finish()]);
@@ -355,12 +356,12 @@ impl Ready {
     }
 
     fn do_resize(&mut self) {
-        let PhysicalSize { width, height } = self.window.inner_size();
+        let PhysicalSize { width, height } = self.target_ctx.window.inner_size();
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
 
         #[expect(clippy::cast_possible_truncation)]
-        let scale_factor = self.window.scale_factor() as f32;
+        let scale_factor = self.target_ctx.window.scale_factor() as f32;
         self.viewport = Viewport::with_physical_size(iced::Size::new(width, height), scale_factor);
 
         self.target_ctx
@@ -434,6 +435,7 @@ struct GpuContext {
 }
 
 struct TargetContext {
+    window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
 }

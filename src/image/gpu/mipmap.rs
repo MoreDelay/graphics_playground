@@ -1,8 +1,7 @@
 use iced::wgpu;
 
-use crate::GpuContext;
-
 use super::SHADER_ROOT;
+use crate::GpuContext;
 
 pub struct MipMapper {
     compute_pipeline: wgpu::ComputePipeline,

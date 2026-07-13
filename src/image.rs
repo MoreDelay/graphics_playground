@@ -3,6 +3,7 @@ mod gpu;
 use std::path::Path;
 
 use iced::wgpu;
+use iced_winit::winit::dpi::{LogicalInsets, LogicalPosition, PhysicalInsets};
 use iced_winit::winit::keyboard::KeyCode;
 
 use crate::{GpuContext, TargetContext};
@@ -42,10 +43,11 @@ impl ImageWidget {
         &mut self,
         ctx: &GpuContext,
         render_pass: &mut wgpu::RenderPass<'_>,
-        viewport: iced::Rectangle,
+        viewport: LogicalInsets<f32>,
+        scale_factor: f64,
     ) {
         if let Some(data) = &mut self.data {
-            data.draw(ctx, render_pass, viewport);
+            data.draw(ctx, render_pass, viewport, scale_factor);
         }
     }
 
@@ -134,12 +136,14 @@ impl WidgetState {
         &mut self,
         ctx: &GpuContext,
         render_pass: &mut wgpu::RenderPass<'_>,
-        viewport: iced::Rectangle,
+        viewport: LogicalInsets<f32>,
+        scale_factor: f64,
     ) {
         self.draw_state.viewport = viewport;
         let features = self.draw_state.pipeline_features();
         self.render_state.update_pipeline(ctx, features);
-        self.render_state.draw(ctx, render_pass, &self.draw_state);
+        self.render_state
+            .draw(ctx, render_pass, &self.draw_state, scale_factor);
     }
 
     pub fn zoom_in(&mut self, cursor: Option<iced::Point>) {
@@ -221,18 +225,10 @@ impl ImageRenderState {
         ctx: &GpuContext,
         render_pass: &mut wgpu::RenderPass<'_>,
         state: &ImageDrawState,
+        scale_factor: f64,
     ) {
-        let view_size = [state.viewport.width, state.viewport.height];
-        let start = [state.offset.x, state.offset.y];
-        let scale = state.scale;
-
-        let raw = gpu::ImageMetadataRaw {
-            view_size,
-            start,
-            scale,
-            _pad: 0,
-        };
-        self.meta_bind.update(ctx, &raw);
+        self.meta_bind
+            .update(ctx, &state.as_image_metadata(scale_factor));
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, self.image.bind_group(), &[]);
@@ -244,10 +240,10 @@ impl ImageRenderState {
 struct ImageDrawState {
     /// Widget location and size as determined by iced layout.
     ///
-    /// Needed to correct transform window to widget coordinates.
-    viewport: iced::Rectangle,
+    /// Needed to transform window to widget coordinates.
+    viewport: LogicalInsets<f32>,
     /// Image starts at this offset from the top left corner of the viewport.
-    offset: iced::Point,
+    offset: LogicalPosition<f32>,
     /// Size of the image.
     size: iced::Size,
     /// Image is scaled by this factor.
@@ -262,6 +258,21 @@ impl ImageDrawState {
     const SCALE_INCREASE_FACTOR: f32 = 1.2;
     const SCALE_MAX: f32 = 100.0;
     const SCALE_MIN: f32 = 0.05;
+
+    fn as_image_metadata(&self, scale_factor: f64) -> gpu::ImageMetadataRaw {
+        let viewport: PhysicalInsets<f32> = self.viewport.to_physical(scale_factor);
+        let width = viewport.right - viewport.left;
+        let height = viewport.bottom - viewport.top;
+
+        let offset = self.offset.to_physical(scale_factor);
+
+        gpu::ImageMetadataRaw {
+            view_size: [width, height],
+            start: [offset.x, offset.y],
+            scale: self.scale,
+            _pad: 0,
+        }
+    }
 
     fn zoom_in(&mut self, fix_point: WidgetPos) {
         let scale = self.scale * Self::SCALE_INCREASE_FACTOR;
@@ -289,7 +300,7 @@ impl ImageDrawState {
         let x = x + fix_point.x;
         let y = y + fix_point.y;
 
-        self.offset = iced::Point::new(x, y);
+        self.offset = LogicalPosition::new(x, y);
         self.scale = scale;
 
         // when the image is at the border, it might move out of frame by zooming
@@ -297,13 +308,13 @@ impl ImageDrawState {
     }
 
     fn pan(&mut self, offset: iced::Vector) {
-        self.offset += offset;
+        self.offset.x += offset.x;
+        self.offset.y += offset.y;
         self.clamp_offset();
     }
 
     fn reset_pos(&mut self) {
-        self.offset = iced::Point::default();
-        // self.clamp_offset();
+        self.offset = LogicalPosition::default();
     }
 
     fn cycle_filters(&mut self) {
@@ -318,30 +329,29 @@ impl ImageDrawState {
     fn clamp_offset(&mut self) {
         const FILLED_PERCENT: f32 = 0.1;
 
-        let x_min = self
-            .viewport
-            .width
-            .mul_add(FILLED_PERCENT, -self.scale * self.size.width);
-        let x_max = self.viewport.width * (1. - FILLED_PERCENT);
+        let width = self.viewport.right - self.viewport.left;
+        let height = self.viewport.bottom - self.viewport.top;
+        let x_min = width.mul_add(FILLED_PERCENT, -self.scale * self.size.width);
+        let x_max = width * (1. - FILLED_PERCENT);
         let x = self.offset.x.clamp(x_min, x_max);
 
-        let y_min = self
-            .viewport
-            .height
-            .mul_add(FILLED_PERCENT, -self.scale * self.size.height);
-        let y_max = self.viewport.height * (1. - FILLED_PERCENT);
+        let y_min = height.mul_add(FILLED_PERCENT, -self.scale * self.size.height);
+        let y_max = height * (1. - FILLED_PERCENT);
         let y = self.offset.y.clamp(y_min, y_max);
 
-        self.offset = iced::Point::new(x, y);
+        self.offset = LogicalPosition::new(x, y);
     }
 
     fn widget_pos(&self, cursor: Option<iced::Point>) -> WidgetPos {
-        let offset = iced::Vector {
-            x: self.viewport.x,
-            y: self.viewport.y,
+        let Some(cursor) = cursor else {
+            return WidgetPos(LogicalPosition::default());
         };
-        let pos = cursor.map(|p| p - offset).unwrap_or_default();
-        WidgetPos(pos)
+        let offset = iced::Vector {
+            x: self.viewport.left,
+            y: self.viewport.top,
+        };
+        let iced::Point { x, y } = cursor - offset;
+        WidgetPos(LogicalPosition::new(x, y))
     }
 
     fn pipeline_features(&self) -> gpu::ImagePipelineFeatures {
@@ -361,8 +371,8 @@ impl ImageDrawState {
 impl Default for ImageDrawState {
     fn default() -> Self {
         Self {
-            viewport: iced::Rectangle::default(),
-            offset: iced::Point::default(),
+            viewport: LogicalInsets::default(),
+            offset: LogicalPosition::default(),
             size: iced::Size::default(),
             scale: 1.,
             filter: gpu::ImageFilter::default(),
@@ -371,12 +381,28 @@ impl Default for ImageDrawState {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct WidgetPos(iced::Point);
+struct WidgetPos(LogicalPosition<f32>);
 
 impl std::ops::Deref for WidgetPos {
-    type Target = iced::Point;
+    type Target = LogicalPosition<f32>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+pub fn inset_to_rectangle(inset: LogicalInsets<f32>, scale_factor: f64) -> iced::Rectangle {
+    let PhysicalInsets {
+        top,
+        left,
+        bottom,
+        right,
+    } = inset.to_physical(scale_factor);
+
+    iced::Rectangle {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
     }
 }

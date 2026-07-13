@@ -6,7 +6,7 @@ use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
-use iced_winit::winit;
+use iced_winit::winit::dpi::{LogicalInsets, LogicalSize};
 use iced_winit::winit::keyboard::KeyCode;
 
 use crate::image::{ImageLoaded, ImageWidget};
@@ -15,8 +15,9 @@ use crate::{GpuContext, TargetContext};
 
 pub struct Controls {
     // Bounds in a cell so that we can update its value with the computed layout from iced by
-    // passing a reference to the widget's draw call.
-    scene_bounds: Cell<Option<iced::Rectangle>>,
+    // passing a reference to the widget's draw call. The layout system gives us logical
+    // coordinates, so store them as such.
+    scene_bounds: Cell<Option<LogicalInsets<f32>>>,
     scene: CurrentScene,
     image: Option<PathBuf>,
 }
@@ -120,35 +121,44 @@ impl Controls {
         }
     }
 
-    pub const fn min_window_size() -> winit::dpi::PhysicalSize<u32> {
-        winit::dpi::PhysicalSize {
+    pub const fn min_window_size() -> LogicalSize<u32> {
+        LogicalSize {
             width: 200 + 100,
             height: 200,
         }
     }
 
+    /// Should be called after [`Controls::view`] to know the viewport bounds.
     pub fn draw_wgpu(
         &mut self,
         ctx: &GpuContext,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
+        scale_factor: f64,
     ) {
-        let Some((mut render_pass, bounds)) = self.start_render_pass(view, encoder) else {
-            return;
-        };
+        let bounds = self.scene_bounds.take().unwrap_or_else(|| LogicalInsets {
+            top: 0.,
+            left: 0.,
+            #[expect(clippy::cast_precision_loss)]
+            bottom: view.texture().height() as f32,
+            #[expect(clippy::cast_precision_loss)]
+            right: view.texture().width() as f32,
+        });
 
+        let mut render_pass = Self::start_render_pass(view, encoder, bounds, scale_factor);
         match &mut self.scene {
             CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
-            CurrentScene::Image(image) => image.draw(ctx, &mut render_pass, bounds),
+            CurrentScene::Image(image) => image.draw(ctx, &mut render_pass, bounds, scale_factor),
         }
     }
 
     fn start_render_pass<'a>(
-        &self,
         target: &'a wgpu::TextureView,
         encoder: &'a mut wgpu::CommandEncoder,
-    ) -> Option<(wgpu::RenderPass<'a>, iced::Rectangle)> {
-        let bounds = self.scene_bounds.take()?;
+        bounds: LogicalInsets<f32>,
+        scale_factor: f64,
+    ) -> wgpu::RenderPass<'a> {
+        let bounds = super::image::inset_to_rectangle(bounds, scale_factor);
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -176,7 +186,7 @@ impl Controls {
         //     bounds.height.ceil() as u32,
         // );
 
-        Some((render_pass, bounds))
+        render_pass
     }
 
     fn pick_image_dialog() -> Option<PathBuf> {
@@ -212,7 +222,7 @@ impl CurrentScene {
 
 #[derive(Debug, Clone)]
 pub struct PlaceholderWidget<'a> {
-    bounds: &'a Cell<Option<iced::Rectangle>>,
+    bounds: &'a Cell<Option<LogicalInsets<f32>>>,
     bg_color: Color,
 }
 
@@ -245,7 +255,13 @@ where
     ) {
         // Update bounds through the cell
         let bounds = layout.bounds();
-        self.bounds.set(Some(bounds));
+        let inset = LogicalInsets {
+            top: bounds.y,
+            left: bounds.x,
+            bottom: bounds.y + bounds.height,
+            right: bounds.x + bounds.width,
+        };
+        self.bounds.set(Some(inset));
 
         // Draw the background
         renderer.fill_quad(

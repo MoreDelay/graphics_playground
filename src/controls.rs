@@ -191,7 +191,7 @@ impl Controls {
 
     fn pick_image_dialog() -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .add_filter("image", &["jpg", "jpeg", "png"])
+            .add_filter("image", &["jpg", "jpeg", "png", "avif", "webp", "jxl"])
             .pick_file()
     }
 }

@@ -19,7 +19,7 @@ fn compute_mipmap(
         return;
     }
 
-    let t00 = textureLoad(src, srcPos);
+    let t00 = textureLoad(src, srcPos + vec2(0, 0));
     let t01 = textureLoad(src, srcPos + vec2(0, 1));
     let t10 = textureLoad(src, srcPos + vec2(1, 0));
     let t11 = textureLoad(src, srcPos + vec2(1, 1));

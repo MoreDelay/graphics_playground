@@ -3,8 +3,8 @@ mod gpu;
 use std::path::Path;
 
 use iced::wgpu;
+use iced_wgpu::core::SmolStr;
 use iced_winit::winit::dpi::{LogicalInsets, LogicalPosition, PhysicalInsets};
-use iced_winit::winit::keyboard::KeyCode;
 
 use crate::{GpuContext, TargetContext};
 
@@ -51,49 +51,45 @@ impl ImageWidget {
         }
     }
 
-    pub fn zoom_in(&mut self, fix_point: Option<iced::Point>) {
-        if let Some(data) = &mut self.data {
-            data.zoom_in(fix_point);
-        }
-    }
-
-    pub fn zoom_out(&mut self, fix_point: Option<iced::Point>) {
-        if let Some(data) = &mut self.data {
-            data.zoom_out(fix_point);
-        }
-    }
-
     pub fn pan(&mut self, offset: iced::Vector) {
         if let Some(data) = &mut self.data {
             data.pan(offset);
         }
     }
 
-    pub fn update(&mut self, message: ImageMessage, cursor: Option<iced::Point>) {
+    pub fn update(&mut self, message: ImageMessage) {
         if let Some(data) = &mut self.data {
-            data.update(message, cursor);
+            data.update(message);
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum ImageMessage {
-    SetZoom(f32),
+    SetZoom {
+        cursor: Option<iced::Point>,
+        scale: f32,
+    },
+    ZoomIn {
+        cursor: Option<iced::Point>,
+    },
+    ZoomOut {
+        cursor: Option<iced::Point>,
+    },
     ResetPosition,
     CycleFilters,
 }
 
-impl TryFrom<KeyCode> for ImageMessage {
-    type Error = ();
-
-    fn try_from(value: KeyCode) -> Result<Self, Self::Error> {
-        #[expect(clippy::wildcard_enum_match_arm)]
-        match value {
-            KeyCode::Digit1 => Ok(Self::SetZoom(1.)),
-            KeyCode::Digit2 => Ok(Self::SetZoom(2.)),
-            KeyCode::KeyS => Ok(Self::ResetPosition),
-            KeyCode::KeyF => Ok(Self::CycleFilters),
-            _ => Err(()),
+impl ImageMessage {
+    pub fn from_key(key: &SmolStr, cursor: Option<iced::Point>) -> Option<Self> {
+        match key.as_str() {
+            "1" => Some(Self::SetZoom { cursor, scale: 1. }),
+            "2" => Some(Self::SetZoom { cursor, scale: 2. }),
+            "s" => Some(Self::ResetPosition),
+            "f" => Some(Self::CycleFilters),
+            "-" => Some(Self::ZoomOut { cursor }),
+            "+" => Some(Self::ZoomIn { cursor }),
+            _ => None,
         }
     }
 }
@@ -146,25 +142,23 @@ impl WidgetState {
             .draw(ctx, render_pass, &self.draw_state, scale_factor);
     }
 
-    pub fn zoom_in(&mut self, cursor: Option<iced::Point>) {
-        let cursor = self.draw_state.widget_pos(cursor);
-        self.draw_state.zoom_in(cursor);
-    }
-
-    pub fn zoom_out(&mut self, cursor: Option<iced::Point>) {
-        let cursor = self.draw_state.widget_pos(cursor);
-        self.draw_state.zoom_out(cursor);
-    }
-
     pub fn pan(&mut self, offset: iced::Vector) {
         self.draw_state.pan(offset);
     }
 
-    pub fn update(&mut self, message: ImageMessage, cursor: Option<iced::Point>) {
+    pub fn update(&mut self, message: ImageMessage) {
         match message {
-            ImageMessage::SetZoom(scale) => {
+            ImageMessage::SetZoom { scale, cursor } => {
                 let cursor = self.draw_state.widget_pos(cursor);
                 self.draw_state.set_zoom(scale, cursor);
+            }
+            ImageMessage::ZoomIn { cursor } => {
+                let cursor = self.draw_state.widget_pos(cursor);
+                self.draw_state.zoom_in(cursor);
+            }
+            ImageMessage::ZoomOut { cursor } => {
+                let cursor = self.draw_state.widget_pos(cursor);
+                self.draw_state.zoom_out(cursor);
             }
             ImageMessage::ResetPosition => self.draw_state.reset_pos(),
             ImageMessage::CycleFilters => self.draw_state.cycle_filters(),

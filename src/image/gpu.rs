@@ -382,3 +382,19 @@ pub struct ImageMetadataRaw {
     /// padding to get to a multiple of alignment bytes (8)
     pub _pad: u32,
 }
+
+fn create_shader_module_desc<'a>(
+    label: Option<&'a str>,
+    wesl_path: &str,
+) -> wgpu::ShaderModuleDescriptor<'a> {
+    let compute_module = wesl_path.parse().expect("module path invalid");
+    let compute_module = wesl::Wesl::new(SHADER_ROOT)
+        .compile(&compute_module)
+        .inspect_err(|e| eprintln!("WESL error: {e}"))
+        .expect("shader invalid")
+        .to_string();
+    wgpu::ShaderModuleDescriptor {
+        label,
+        source: wgpu::ShaderSource::Wgsl(compute_module.into()),
+    }
+}

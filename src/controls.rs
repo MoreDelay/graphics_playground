@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 
 use iced::advanced::mouse::Cursor;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
+use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize};
-use iced_winit::winit::keyboard::KeyCode;
 
-use crate::image::{ImageLoaded, ImageWidget};
+use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
 use crate::scene::RenderWidget;
 use crate::{GpuContext, TargetContext};
 
@@ -22,14 +22,14 @@ pub struct Controls {
     image: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Message {
     SwitchScene,
     SelectFile,
     ScrollUp,
     ScrollDown,
     Drag(iced::Vector),
-    KeyPress(KeyCode),
+    KeyPress(SmolStr),
 }
 
 impl Controls {
@@ -102,21 +102,24 @@ impl Controls {
                 self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
-                let fix_point = cursor.position();
-                widget.zoom_in(fix_point);
+                let cursor = cursor.position();
+                let message = ImageMessage::ZoomIn { cursor };
+                widget.update(message);
             }
             (CurrentScene::Image(widget), Message::ScrollDown) => {
-                let fix_point = cursor.position();
-                widget.zoom_out(fix_point);
+                let cursor = cursor.position();
+                let message = ImageMessage::ZoomOut { cursor };
+                widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Drag(offset)) => {
                 widget.pan(offset);
             }
             (CurrentScene::Image(widget), Message::KeyPress(key)) => {
-                let Ok(message) = key.try_into() else {
+                let cursor = cursor.position();
+                let Some(message) = ImageMessage::from_key(&key, cursor) else {
                     return;
                 };
-                widget.update(message, cursor.position());
+                widget.update(message);
             }
         }
     }

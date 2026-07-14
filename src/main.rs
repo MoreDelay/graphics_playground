@@ -9,12 +9,13 @@ use iced::Event;
 use iced::advanced::mouse::Cursor;
 use iced::futures::executor::block_on;
 use iced_graphics::{Shell, Viewport};
+use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::conversion::{cursor_position, window_event};
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::winit::event::{ElementState, MouseButton};
-use iced_winit::winit::keyboard::KeyCode;
+use iced_winit::winit::keyboard::Key;
 use iced_winit::{Clipboard, winit};
 use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -58,7 +59,6 @@ impl winit::application::ApplicationHandler for Runner {
         event: WindowEvent,
     ) {
         use winit::event::KeyEvent;
-        use winit::keyboard::{KeyCode, PhysicalKey};
 
         let Self::Ready(ready) = self else {
             return;
@@ -76,16 +76,16 @@ impl winit::application::ApplicationHandler for Runner {
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
-                        physical_key: PhysicalKey::Code(key),
+                        logical_key: Key::Character(ref symbol),
                         state: ElementState::Pressed,
                         ..
                     },
                 ..
-            } => match key {
-                KeyCode::KeyQ if ready.modifiers.control_key() => {
+            } => match symbol.as_str() {
+                "q" if ready.modifiers.control_key() => {
                     event_loop.exit();
                 }
-                key => ready.key_pressed(key),
+                _ => ready.key_pressed(symbol.clone()),
             },
             _ => {}
         }
@@ -414,7 +414,7 @@ impl Ready {
         }
     }
 
-    fn key_pressed(&mut self, key: KeyCode) {
+    fn key_pressed(&mut self, key: SmolStr) {
         let message = Message::KeyPress(key);
         self.controls
             .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);

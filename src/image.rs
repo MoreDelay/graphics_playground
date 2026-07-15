@@ -85,6 +85,7 @@ impl ImageMessage {
         match key.as_str() {
             "1" => Some(Self::SetZoom { cursor, scale: 1. }),
             "2" => Some(Self::SetZoom { cursor, scale: 2. }),
+            "9" => Some(Self::SetZoom { cursor, scale: 0.5 }),
             "s" => Some(Self::ResetPosition),
             "f" => Some(Self::CycleFilters),
             "-" => Some(Self::ZoomOut { cursor }),

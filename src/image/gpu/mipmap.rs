@@ -171,7 +171,7 @@ impl<'a> MipMapRunner<'a> {
     ) -> Option<Self> {
         use wgpu::TextureFormat::*;
 
-        let sigma = 1.;
+        let sigma = 1.0;
 
         assert!(
             matches!(texture.format(), Rgba8Unorm | Rgba8UnormSrgb),
@@ -188,7 +188,7 @@ impl<'a> MipMapRunner<'a> {
         let label = Some("MipMapper filtered-2d storage texture");
         let texture_filtered_2d = Self::create_storage_texture(ctx, texture, label);
 
-        let label = Some("MipMapper Complete storage texture");
+        let label = Some("MipMapper downsampled storage texture");
         let texture_downsampled = Self::create_storage_texture(ctx, texture, label);
 
         let kernel_layout = KernelBindGroupLayout::new(ctx);
@@ -505,6 +505,10 @@ impl KernelBinding {
             let gauss_value = factor * exponent.exp();
 
             *k = gauss_value;
+        }
+        let total: f32 = kernel.iter().sum();
+        for v in &mut kernel {
+            *v /= total;
         }
         kernel
     }

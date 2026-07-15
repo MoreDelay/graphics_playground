@@ -72,7 +72,7 @@ fn filter_bilinear(pos_corner: vec2<f32>) -> vec4<f32> {
     // Move this point to the center of the pixel.
     let pos_center = pos_corner - vec2(0.5, 0.5);
 
-    let level = u32(max(0., floor(log2(view_info.scale))));
+    let level = u32(max(0., floor(log2(1. / view_info.scale))));
     let pos = pos_center / exp2(f32(level));
 
     let weights = bilinear_weights(fract(pos));

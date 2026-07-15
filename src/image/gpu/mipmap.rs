@@ -8,132 +8,170 @@ use image::EncodableLayout as _;
 use crate::GpuContext;
 
 pub struct MipMapper {
-    compute_pipeline_downsampling: wgpu::ComputePipeline,
-    compute_pipeline_convolution: wgpu::ComputePipeline,
-    storage_texture_layout: wgpu::BindGroupLayout,
+    pipeline_downsampling: wgpu::ComputePipeline,
+    pipeline_convolution: wgpu::ComputePipeline,
+    texture_layout: wgpu::BindGroupLayout,
     #[expect(unused)]
-    kernel_texture_layout: wgpu::BindGroupLayout,
+    kernel_layout: wgpu::BindGroupLayout,
 }
 
 impl MipMapper {
     const SHADER_DOWNSAMPLING: &str = "package::mipmapper";
-    const SHADER_CONVOLUTION: &str = "package::gauss_filter";
+    const SHADER_CONVOLUTION: &str = "package::convolution";
 
-    #[expect(clippy::too_many_lines)]
     pub fn new(ctx: &GpuContext) -> Self {
-        let storage_texture_layout =
-            ctx.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("MipMapper Storage Texture Layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                access: wgpu::StorageTextureAccess::ReadOnly,
-                                format: wgpu::TextureFormat::Rgba8Unorm,
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                access: wgpu::StorageTextureAccess::WriteOnly,
-                                format: wgpu::TextureFormat::Rgba8Unorm,
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
+        let texture_layout = Self::create_texture_layout(ctx);
+        let kernel_layout = Self::create_kernel_layout(ctx);
 
-        let kernel_texture_layout =
-            ctx.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("MipMapper Kernel Texture Layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                access: wgpu::StorageTextureAccess::ReadOnly,
-                                format: wgpu::TextureFormat::R32Float,
-                                view_dimension: wgpu::TextureViewDimension::D1,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
-
-        let pipeline_layout_downsampling =
-            ctx.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("MipMapper Downsampling Pipeline Layout"),
-                    bind_group_layouts: &[&storage_texture_layout],
-                    push_constant_ranges: &[],
-                });
-        let compute_module = super::create_shader_module_desc(
-            Some("Downsampling Shader"),
-            Self::SHADER_DOWNSAMPLING,
-        );
-        let compute_module = ctx.device.create_shader_module(compute_module);
-        let compute_pipeline_downsampling =
-            ctx.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("MipMapper Downsampling Pipeline"),
-                    layout: Some(&pipeline_layout_downsampling),
-                    module: &compute_module,
-                    entry_point: Some("compute_mipmap"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                });
-
-        let pipeline_layout_convolution =
-            ctx.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("MipMapper Convolution Pipeline Layout"),
-                    bind_group_layouts: &[&storage_texture_layout, &kernel_texture_layout],
-                    push_constant_ranges: &[],
-                });
-        let compute_module =
-            super::create_shader_module_desc(Some("Convolution Shader"), Self::SHADER_CONVOLUTION);
-        let compute_module = ctx.device.create_shader_module(compute_module);
-        let compute_pipeline_convolution =
-            ctx.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("MipMapper Convolution Pipeline"),
-                    layout: Some(&pipeline_layout_convolution),
-                    module: &compute_module,
-                    entry_point: Some("apply_kernel"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                });
+        let pipeline_downsampling = Self::create_pipeline_downsampling(ctx, &texture_layout);
+        let pipeline_convolution =
+            Self::create_pipeline_convolution(ctx, &texture_layout, &kernel_layout);
 
         Self {
-            compute_pipeline_downsampling,
-            compute_pipeline_convolution,
-            storage_texture_layout,
-            kernel_texture_layout,
+            pipeline_downsampling,
+            pipeline_convolution,
+            texture_layout,
+            kernel_layout,
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn compute_mipmaps(&self, ctx: &GpuContext, texture: &wgpu::Texture) {
+        let Some(runner) = MipMapRunner::new(ctx, self, texture) else {
+            return;
+        };
+        runner.run(ctx);
+    }
+
+    fn create_texture_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
+        ctx.device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("MipMapper Storage Texture Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::ReadOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            })
+    }
+
+    fn create_kernel_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
+        ctx.device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("MipMapper Kernel Texture Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::ReadOnly,
+                            format: wgpu::TextureFormat::R32Float,
+                            view_dimension: wgpu::TextureViewDimension::D1,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            })
+    }
+
+    fn create_pipeline_downsampling(
+        ctx: &GpuContext,
+        texture_layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::ComputePipeline {
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MipMapper Downsampling Pipeline Layout"),
+                bind_group_layouts: &[texture_layout],
+                push_constant_ranges: &[],
+            });
+        let module = super::create_shader_module_desc(
+            Some("Downsampling Shader"),
+            Self::SHADER_DOWNSAMPLING,
+        );
+        let module = ctx.device.create_shader_module(module);
+        ctx.device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("MipMapper Downsampling Pipeline"),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("compute_mipmap"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+    }
+
+    fn create_pipeline_convolution(
+        ctx: &GpuContext,
+        texture_layout: &wgpu::BindGroupLayout,
+        kernel_layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::ComputePipeline {
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MipMapper Convolution Pipeline Layout"),
+                bind_group_layouts: &[texture_layout, kernel_layout],
+                push_constant_ranges: &[],
+            });
+        let module =
+            super::create_shader_module_desc(Some("Convolution Shader"), Self::SHADER_CONVOLUTION);
+        let module = ctx.device.create_shader_module(module);
+        ctx.device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("MipMapper Convolution Pipeline"),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("apply_kernel"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+    }
+}
+
+struct MipMapRunner<'a> {
+    mip_mapper: &'a MipMapper,
+    texture: &'a wgpu::Texture,
+    texture_filtered_1d: wgpu::Texture,
+    texture_filtered_2d: wgpu::Texture,
+    texture_downsampled: wgpu::Texture,
+    kernel_bind: KernelBinding,
+}
+
+impl<'a> MipMapRunner<'a> {
+    fn new(
+        ctx: &GpuContext,
+        mip_mapper: &'a MipMapper,
+        texture: &'a wgpu::Texture,
+    ) -> Option<Self> {
         use wgpu::TextureFormat::*;
 
-        let sigma = 3.;
+        let sigma = 1.;
 
         assert!(
             matches!(texture.format(), Rgba8Unorm | Rgba8UnormSrgb),
@@ -141,156 +179,224 @@ impl MipMapper {
         );
 
         if texture.mip_level_count() == 1 {
-            return;
+            return None;
         }
-
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         let label = Some("MipMapper filtered-1d storage texture");
-        let texture_filtered_1d = Self::create_storage_texture(ctx, label, texture);
+        let texture_filtered_1d = Self::create_storage_texture(ctx, texture, label);
 
         let label = Some("MipMapper filtered-2d storage texture");
-        let texture_filtered_2d = Self::create_storage_texture(ctx, label, texture);
+        let texture_filtered_2d = Self::create_storage_texture(ctx, texture, label);
 
         let label = Some("MipMapper Complete storage texture");
-        let texture_complete = Self::create_storage_texture(ctx, label, texture);
-        {
-            let src = wgpu::TexelCopyTextureInfo {
-                mip_level: 0,
-                ..texture.as_image_copy()
-            };
-            let dst = wgpu::TexelCopyTextureInfo {
-                mip_level: 0,
-                ..texture_complete.as_image_copy()
-            };
-            encoder.copy_texture_to_texture(src, dst, texture.size());
-        }
+        let texture_downsampled = Self::create_storage_texture(ctx, texture, label);
 
         let kernel_layout = KernelBindGroupLayout::new(ctx);
         let kernel_bind = KernelBinding::new(sigma, ctx, &kernel_layout);
 
-        let mut src_view = texture_complete.create_view(&wgpu::TextureViewDescriptor {
-            base_mip_level: 0,
-            mip_level_count: Some(1),
-            ..Default::default()
-        });
+        Some(Self {
+            mip_mapper,
+            texture,
+            texture_filtered_1d,
+            texture_filtered_2d,
+            texture_downsampled,
+            kernel_bind,
+        })
+    }
 
-        let dispatch_x = texture_complete.width().div_ceil(16);
-        let dispatch_y = texture_complete.height().div_ceil(16);
+    fn run(self, ctx: &GpuContext) {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        // copy over start texture to base level in downsampled texture stack
+        {
+            let src = wgpu::TexelCopyTextureInfo {
+                mip_level: 0,
+                ..self.texture.as_image_copy()
+            };
+            let dst = wgpu::TexelCopyTextureInfo {
+                mip_level: 0,
+                ..self.texture_downsampled.as_image_copy()
+            };
+            encoder.copy_texture_to_texture(src, dst, self.texture.size());
+        }
+
+        // run mip map construction
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("MipMapper Compute Pass"),
                 timestamp_writes: None,
             });
-            for mip_level in 1..texture.mip_level_count() {
-                pass.set_pipeline(&self.compute_pipeline_convolution);
-                let dst_view = texture_filtered_1d.create_view(&wgpu::TextureViewDescriptor {
-                    base_mip_level: mip_level - 1,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                });
-                let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("MipMapper Filter-1d Bind Group"),
-                    layout: &self.storage_texture_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&src_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&dst_view),
-                        },
-                    ],
-                });
-                kernel_bind.set_axis(ctx, Axis::X);
-                pass.set_bind_group(0, &texture_bind_group, &[]);
-                pass.set_bind_group(1, kernel_bind.bind_group(), &[]);
-                pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
-                src_view = dst_view;
 
-                let dst_view = texture_filtered_2d.create_view(&wgpu::TextureViewDescriptor {
-                    base_mip_level: mip_level - 1,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                });
-                let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("MipMapper Filter-2d Bind Group"),
-                    layout: &self.storage_texture_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&src_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&dst_view),
-                        },
-                    ],
-                });
-                kernel_bind.set_axis(ctx, Axis::Y);
-                pass.set_bind_group(0, &texture_bind_group, &[]);
-                // kept from last call
-                // pass.set_bind_group(1, kernel_bind.bind_group(), &[]);
-                pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
-                src_view = dst_view;
-
-                pass.set_pipeline(&self.compute_pipeline_downsampling);
-                let dst_view = texture_complete.create_view(&wgpu::TextureViewDescriptor {
-                    base_mip_level: mip_level,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                });
-                let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("MipMapper Downsampling BindGroup"),
-                    layout: &self.storage_texture_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&src_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&dst_view),
-                        },
-                    ],
-                });
-                pass.set_bind_group(0, &texture_bind_group, &[]);
-                pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
-                src_view = dst_view;
+            let mip_level_iterations = self.texture.mip_level_count() - 1;
+            for mip_level in 0..mip_level_iterations {
+                self.run_filter_over_x(ctx, &mut pass, mip_level);
+                self.run_filter_over_y(ctx, &mut pass, mip_level);
+                self.run_downsampling(ctx, &mut pass, mip_level);
             }
         }
-        println!("complete, now copy over");
 
         // copy computed mip maps over to texture
         {
-            let mut size = texture.size();
-            for mip_level in 1..texture.mip_level_count() {
-                size.width /= 2;
-                size.height /= 2;
+            let full_size = self.texture.size();
+            for mip_level in 1..self.texture.mip_level_count() {
+                let size = wgpu::Extent3d {
+                    width: full_size.width >> mip_level, // divide by 2^mip_level
+                    height: full_size.height >> mip_level,
+                    depth_or_array_layers: 1,
+                };
 
                 let src = wgpu::TexelCopyTextureInfo {
                     mip_level,
-                    ..texture_complete.as_image_copy()
+                    ..self.texture_downsampled.as_image_copy()
                 };
                 let dst = wgpu::TexelCopyTextureInfo {
                     mip_level,
-                    ..texture.as_image_copy()
+                    ..self.texture.as_image_copy()
                 };
                 encoder.copy_texture_to_texture(src, dst, size);
             }
         }
-        println!("submit now");
+
         ctx.queue.submit([encoder.finish()]);
-        println!("done");
+    }
+
+    fn run_filter_over_x(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
+        let src_view = self
+            .texture_downsampled
+            .create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: mip_level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+        let dst_view = self
+            .texture_filtered_1d
+            .create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: mip_level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+        let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MipMapper Filter-1d Bind Group"),
+            layout: &self.mip_mapper.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&dst_view),
+                },
+            ],
+        });
+        self.kernel_bind.set_axis(ctx, Axis::X);
+
+        let dispatch_x = self.texture_downsampled.width() >> mip_level; // divide by 2^mip_level
+        let dispatch_y = self.texture_downsampled.height() >> mip_level;
+        let dispatch_x = dispatch_x.div_ceil(16);
+        let dispatch_y = dispatch_y.div_ceil(16);
+
+        pass.set_pipeline(&self.mip_mapper.pipeline_convolution);
+        pass.set_bind_group(0, &texture_bind_group, &[]);
+        pass.set_bind_group(1, self.kernel_bind.bind_group(), &[]);
+        pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+    }
+
+    fn run_filter_over_y(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
+        let src_view = self
+            .texture_filtered_1d
+            .create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: mip_level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+        let dst_view = self
+            .texture_filtered_2d
+            .create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: mip_level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+        let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MipMapper Filter-1d Bind Group"),
+            layout: &self.mip_mapper.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&dst_view),
+                },
+            ],
+        });
+        self.kernel_bind.set_axis(ctx, Axis::Y);
+
+        let dispatch_x = self.texture_downsampled.width() >> mip_level; // divide by 2^mip_level
+        let dispatch_y = self.texture_downsampled.height() >> mip_level;
+        let dispatch_x = dispatch_x.div_ceil(16);
+        let dispatch_y = dispatch_y.div_ceil(16);
+
+        pass.set_pipeline(&self.mip_mapper.pipeline_convolution);
+        pass.set_bind_group(0, &texture_bind_group, &[]);
+        pass.set_bind_group(1, self.kernel_bind.bind_group(), &[]);
+        pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+    }
+
+    fn run_downsampling(
+        &self,
+        ctx: &GpuContext,
+        pass: &mut wgpu::ComputePass,
+        source_mip_level: u32,
+    ) {
+        let target_mip_level = source_mip_level + 1;
+
+        let src_view = self
+            .texture_filtered_2d
+            .create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: source_mip_level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+        let dst_view = self
+            .texture_downsampled
+            .create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: target_mip_level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+        let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MipMapper Downsampling BindGroup"),
+            layout: &self.mip_mapper.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&dst_view),
+                },
+            ],
+        });
+
+        let dispatch_x = self.texture_downsampled.width() >> target_mip_level; // divide by 2^mip_level
+        let dispatch_y = self.texture_downsampled.height() >> target_mip_level;
+        let dispatch_x = dispatch_x.div_ceil(16);
+        let dispatch_y = dispatch_y.div_ceil(16);
+
+        pass.set_pipeline(&self.mip_mapper.pipeline_downsampling);
+        pass.set_bind_group(0, &texture_bind_group, &[]);
+        pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
     fn create_storage_texture(
         ctx: &GpuContext,
-        label: Option<&str>,
         base: &wgpu::Texture,
+        label: Option<&str>,
     ) -> wgpu::Texture {
         ctx.device.create_texture(&wgpu::TextureDescriptor {
             label,

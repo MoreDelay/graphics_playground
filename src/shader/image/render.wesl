@@ -1,5 +1,3 @@
-import package::vertex::VSOutput;
-
 struct Viewport {
     origin: vec2<u32>,
     size: vec2<u32>,
@@ -13,8 +11,6 @@ struct ImageInfo {
 
 @group(0) @binding(0)
 var t_image: texture_2d<f32>;
-@group(0) @binding(1)
-var s_image: sampler;
 
 @group(1) @binding(0)
 var<uniform> viewport: Viewport;
@@ -33,7 +29,8 @@ fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
     return mat2x2(left, right);
 }
 
-// Use integer coords as otherwise some pixels are jumping on large images due to floating point errors.
+// Use integer coords as otherwise some pixels are jumping on large images due to floating
+// point errors.
 fn sample_at(coords: vec2<i32>, level: u32) -> vec4<f32> {
     let dims = vec2<i32>(textureDimensions(t_image));
 
@@ -45,13 +42,10 @@ fn sample_at(coords: vec2<i32>, level: u32) -> vec4<f32> {
     return sample;
 }
 
-fn filter_bilinear(pos_corner: vec2<f32>) -> vec4<f32> {
-    // Lerp assumes a sampled light is at a infinitesimal point.
-    // Move this point to the center of the pixel.
-    let pos_center = pos_corner - vec2(0.5, 0.5);
-
-    let level = u32(max(0., floor(log2(1. / image_info.zoom))));
-    let pos = pos_center / exp2(f32(level));
+fn filter_bilinear(pos_center: vec2<f32>) -> vec4<f32> {
+    let level_f = max(0., floor(log2(1. / image_info.zoom)));
+    let pos = pos_center / exp2(level_f);
+    let level = u32(level_f);
 
     let weights = bilinear_weights(fract(pos));
     let grid_pos = vec2<i32>(floor(pos));
@@ -67,9 +61,10 @@ fn filter_nearest(pos: vec2<f32>) -> vec4<f32> {
 }
 
 @fragment
-fn fs_image(in: VSOutput) -> @location(0) vec4<f32> {
-    let viewport_uv = in.uv;
-    let viewport_pos = viewport_uv * vec2<f32>(viewport.size);
+fn fs_image(@builtin(position) in: vec4<f32>) -> @location(0) vec4<f32> {
+    // `viewport_pos` is the current pixel location (center, ending in .5) in viewport coordinates.
+    // This can be casted to vec2<u32> for discrete locations.
+    let viewport_pos = (in.xy - vec2<f32>(viewport.origin));
     let image_pos = (viewport_pos - image_info.start) / image_info.zoom;
 
     @if(FILTER_BILINEAR)

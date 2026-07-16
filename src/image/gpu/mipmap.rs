@@ -606,7 +606,6 @@ struct StorageTextureCopyHelper {
     texture_layout: wgpu::BindGroupLayout,
     texture_to_storage: wgpu::RenderPipeline,
     storage_to_texture: wgpu::RenderPipeline,
-    sampler: wgpu::Sampler,
 }
 
 impl StorageTextureCopyHelper {
@@ -617,13 +616,11 @@ impl StorageTextureCopyHelper {
         let texture_layout = Self::create_texture_layout(ctx);
         let (texture_to_storage, storage_to_texture) =
             Self::create_copy_pipelines(ctx, &texture_layout, format);
-        let sampler = Self::create_copy_sampler(ctx);
 
         Self {
             texture_layout,
             texture_to_storage,
             storage_to_texture,
-            sampler,
         }
     }
 
@@ -677,16 +674,10 @@ impl StorageTextureCopyHelper {
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Copy to Storage BindGroup"),
             layout: &self.texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&src_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&src_view),
+            }],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -712,24 +703,16 @@ impl StorageTextureCopyHelper {
         ctx.device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Copy Pipeline Texture Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
+                    count: None,
+                }],
             })
     }
 
@@ -821,14 +804,5 @@ impl StorageTextureCopyHelper {
                 });
 
         (to_storage_pipeline, to_texture_pipeline)
-    }
-
-    fn create_copy_sampler(ctx: &GpuContext) -> wgpu::Sampler {
-        ctx.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Copy Sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            ..wgpu::SamplerDescriptor::default()
-        })
     }
 }

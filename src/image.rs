@@ -1,3 +1,4 @@
+mod filters;
 mod gpu;
 
 use std::path::Path;

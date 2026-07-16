@@ -6,6 +6,7 @@ use iced::wgpu::{self};
 use image::EncodableLayout as _;
 
 use crate::GpuContext;
+use crate::image::filters::GaussFilter;
 
 pub struct MipMapper {
     pipeline_downsampling: wgpu::ComputePipeline,
@@ -432,7 +433,8 @@ pub enum Axis {
 
 impl KernelBinding {
     fn new(sigma: f32, ctx: &GpuContext, layout: &KernelBindGroupLayout) -> Self {
-        let kernel = Self::create_gauss_kernel(sigma);
+        let gauss_filter = GaussFilter::new(sigma).expect("sigma should be non-negative");
+        let kernel = gauss_filter.blur_kernel();
         let storage_texture = Self::create_kernel_texture(ctx, &kernel);
         let view = storage_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -492,27 +494,6 @@ impl KernelBinding {
 
     const fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
-    }
-
-    fn create_gauss_kernel(sigma: f32) -> Vec<f32> {
-        assert!(sigma > 0., "standard deviation must be non-negative");
-        #[expect(clippy::cast_possible_truncation)]
-        let radius = (3. * sigma).ceil() as usize;
-        let mut kernel = vec![0.; radius + 1 + radius];
-        for (i, k) in kernel.iter_mut().enumerate() {
-            #[expect(clippy::cast_precision_loss)]
-            let t = i as f32 - radius as f32;
-            let factor = 1. / ((2. * f32::consts::PI).sqrt() * sigma);
-            let exponent = (-t * t) / (2. * sigma * sigma);
-            let gauss_value = factor * exponent.exp();
-
-            *k = gauss_value;
-        }
-        let total: f32 = kernel.iter().sum();
-        for v in &mut kernel {
-            *v /= total;
-        }
-        kernel
     }
 
     fn create_kernel_texture(ctx: &GpuContext, kernel: &[f32]) -> wgpu::Texture {
@@ -636,7 +617,6 @@ impl StorageTextureCopyHelper {
         let texture_layout = Self::create_texture_layout(ctx);
         let (texture_to_storage, storage_to_texture) =
             Self::create_copy_pipelines(ctx, &texture_layout, format);
-
         let sampler = Self::create_copy_sampler(ctx);
 
         Self {

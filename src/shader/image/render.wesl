@@ -1,9 +1,14 @@
 import package::vertex::VSOutput;
 
-struct ViewInfo {
-    view_size: vec2<f32>,
+struct Viewport {
+    origin: vec2<u32>,
+    size: vec2<u32>,
+    scale: f32, // scale factor of monitor
+}
+
+struct ImageInfo {
     start: vec2<f32>,
-    scale: f32,
+    zoom: f32,
 }
 
 @group(0) @binding(0)
@@ -12,7 +17,9 @@ var t_image: texture_2d<f32>;
 var s_image: sampler;
 
 @group(1) @binding(0)
-var<uniform> view_info: ViewInfo;
+var<uniform> viewport: Viewport;
+@group(1) @binding(1)
+var<uniform> image_info: ImageInfo;
 
 fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
     let tl = (1. - fract.x) * (1. - fract.y);
@@ -43,7 +50,7 @@ fn filter_bilinear(pos_corner: vec2<f32>) -> vec4<f32> {
     // Move this point to the center of the pixel.
     let pos_center = pos_corner - vec2(0.5, 0.5);
 
-    let level = u32(max(0., floor(log2(1. / view_info.scale))));
+    let level = u32(max(0., floor(log2(1. / image_info.zoom))));
     let pos = pos_center / exp2(f32(level));
 
     let weights = bilinear_weights(fract(pos));
@@ -62,8 +69,8 @@ fn filter_nearest(pos: vec2<f32>) -> vec4<f32> {
 @fragment
 fn fs_image(in: VSOutput) -> @location(0) vec4<f32> {
     let viewport_uv = in.uv;
-    let viewport_pos = viewport_uv * view_info.view_size;
-    let image_pos = (viewport_pos - view_info.start) / view_info.scale;
+    let viewport_pos = viewport_uv * vec2<f32>(viewport.size);
+    let image_pos = (viewport_pos - image_info.start) / image_info.zoom;
 
     @if(FILTER_BILINEAR)
     let color = filter_bilinear(image_pos);

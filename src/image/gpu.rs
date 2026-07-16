@@ -1,11 +1,9 @@
 mod mipmap;
 
 use std::num::NonZeroU64;
-use std::path::Path;
 
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt as _;
-use image::ImageBuffer;
 
 use super::ImageLoaded;
 use crate::GpuContext;
@@ -251,50 +249,79 @@ impl Texture {
 
 pub struct ImageMetadataBinding {
     bind_group: wgpu::BindGroup,
-    buffer: wgpu::Buffer,
+    viewport: wgpu::Buffer,
+    image_meta: wgpu::Buffer,
 }
 
 impl ImageMetadataBinding {
-    pub fn for_image(
-        image: &ImageLoaded,
-        ctx: &GpuContext,
-        layout: &ImageMetadataBindGroupLayout,
-    ) -> Self {
-        #[expect(clippy::cast_precision_loss)]
-        let data = ImageMetadataRaw {
-            view_size: [image.width() as f32, image.height() as f32],
-            start: [0., 0.],
+    pub fn new(ctx: &GpuContext, layout: &ImageMetadataBindGroupLayout) -> Self {
+        let viewport = ViewportRaw {
+            origin: [0, 0],
+            size: [1, 1],
             scale: 1.,
             _pad: 0,
         };
-        let buffer = ctx
+        let viewport = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Viewport Buffer"),
+                contents: bytemuck::cast_slice(&[viewport]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let image_meta = ImageMetadataRaw {
+            start: [0., 0.],
+            zoom: 1.,
+            _pad: 0,
+        };
+        let image_meta = ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("ImageMetadata Buffer"),
-                contents: bytemuck::cast_slice(&[data]),
+                contents: bytemuck::cast_slice(&[image_meta]),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
+
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ImageMetadata Bind Group"),
+            label: Some("Metadata Bind Group"),
             layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: viewport.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: image_meta.as_entire_binding(),
+                },
+            ],
         });
-        Self { bind_group, buffer }
+        Self {
+            bind_group,
+            viewport,
+            image_meta,
+        }
     }
 
-    pub fn update(&self, ctx: &GpuContext, raw: &ImageMetadataRaw) {
-        const SIZE: NonZeroU64 = NonZeroU64::new(std::mem::size_of::<ImageMetadataRaw>() as u64)
-            .expect("struct not empty");
+    pub fn update_viewport(&self, ctx: &GpuContext, viewport_raw: &ViewportRaw) {
+        const VIEWPORT_SIZE: NonZeroU64 =
+            NonZeroU64::new(std::mem::size_of::<ViewportRaw>() as u64).expect("struct not empty");
 
-        let mut view = ctx
-            .queue
-            .write_buffer_with(&self.buffer, 0, SIZE)
-            .expect("failed creating temporary buffer for upload");
+        ctx.queue
+            .write_buffer_with(&self.viewport, 0, VIEWPORT_SIZE)
+            .expect("failed creating temporary buffer for upload")
+            .copy_from_slice(bytemuck::cast_slice(&[*viewport_raw]));
+    }
 
-        view.copy_from_slice(bytemuck::cast_slice(&[*raw]));
+    pub fn update_image_metadata(&self, ctx: &GpuContext, image_meta_raw: &ImageMetadataRaw) {
+        const IMAGE_META_SIZE: NonZeroU64 =
+            NonZeroU64::new(std::mem::size_of::<ImageMetadataRaw>() as u64)
+                .expect("struct not empty");
+
+        ctx.queue
+            .write_buffer_with(&self.image_meta, 0, IMAGE_META_SIZE)
+            .expect("failed creating temporary buffer for upload")
+            .copy_from_slice(bytemuck::cast_slice(&[*image_meta_raw]));
     }
 }
 
@@ -353,16 +380,28 @@ impl ImageMetadataBindGroupLayout {
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("ImageMetadata Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
             });
         Self(layout)
     }
@@ -378,78 +417,24 @@ impl std::ops::Deref for ImageMetadataBindGroupLayout {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ImageMetadataRaw {
-    /// (width, height) of the whole image
-    pub view_size: [f32; 2],
-    /// (width, height) of the visible area
-    pub start: [f32; 2],
-    /// scale of image
+pub struct ViewportRaw {
+    /// (x, y) in framebuffer where viewport starts (top-left corner)
+    pub origin: [u32; 2],
+    /// (width, height) of the viewport
+    pub size: [u32; 2],
+    /// scale factor of monitor
     pub scale: f32,
     /// padding to get to a multiple of alignment bytes (8)
     pub _pad: u32,
 }
 
-#[expect(unused, reason = "currently only ever used for debugging")]
-fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
-    assert!(
-        matches!(
-            texture.format(),
-            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
-        ),
-        "only rgba supported atm"
-    );
-
-    let mip_level = 1;
-    let width = texture.width() / 2;
-    let height = texture.height() / 2;
-
-    let size = width * height * 4;
-    let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: size as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    ctx.queue.submit(Some(encoder.finish()));
-
-    {
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |res| res.expect("copy should succeed"));
-        ctx.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("single threaded wait should succeed");
-
-        let data = slice.get_mapped_range();
-        let image = ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, data)
-            .expect("texture should fit into specified dimensions, checked before");
-        image.save(image_path).expect("saving to disk should work");
-    }
-    buffer.unmap();
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ImageMetadataRaw {
+    /// (width, height) of the visible area
+    pub start: [f32; 2],
+    /// zoom of image (greater than 1 means magnification)
+    pub zoom: f32,
+    /// padding to get to a multiple of alignment bytes (8)
+    pub _pad: u32,
 }

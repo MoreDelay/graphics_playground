@@ -186,7 +186,7 @@ impl ImageRenderState {
         features: gpu::ImagePipelineFeatures,
     ) -> Self {
         let meta_layout = gpu::ImageMetadataBindGroupLayout::new(ctx);
-        let meta_bind = gpu::ImageMetadataBinding::for_image(image, ctx, &meta_layout);
+        let meta_bind = gpu::ImageMetadataBinding::new(ctx, &meta_layout);
 
         let texture_layout = gpu::TextureBindGroupLayout::new(ctx);
         let image = gpu::ImageUploaded::upload(image, ctx, &texture_layout);
@@ -226,7 +226,9 @@ impl ImageRenderState {
         scale_factor: f64,
     ) {
         self.meta_bind
-            .update(ctx, &state.as_image_metadata(scale_factor));
+            .update_viewport(ctx, &state.build_viewport_raw(scale_factor));
+        self.meta_bind
+            .update_image_metadata(ctx, &state.build_image_metadata_raw(scale_factor));
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, self.image.bind_group(), &[]);
@@ -257,17 +259,28 @@ impl ImageDrawState {
     const SCALE_MAX: f32 = 100.0;
     const SCALE_MIN: f32 = 0.05;
 
-    fn as_image_metadata(&self, scale_factor: f64) -> gpu::ImageMetadataRaw {
-        let viewport: PhysicalInsets<f32> = self.viewport.to_physical(scale_factor);
+    fn build_viewport_raw(&self, scale_factor: f64) -> gpu::ViewportRaw {
+        let viewport: PhysicalInsets<u32> = self.viewport.to_physical(scale_factor);
         let width = viewport.right - viewport.left;
         let height = viewport.bottom - viewport.top;
 
+        #[expect(clippy::cast_possible_truncation)]
+        let scale = scale_factor as f32;
+
+        gpu::ViewportRaw {
+            origin: [viewport.left, viewport.top],
+            size: [width, height],
+            scale,
+            _pad: 0,
+        }
+    }
+
+    fn build_image_metadata_raw(&self, scale_factor: f64) -> gpu::ImageMetadataRaw {
         let offset = self.offset.to_physical(scale_factor);
 
         gpu::ImageMetadataRaw {
-            view_size: [width, height],
             start: [offset.x, offset.y],
-            scale: self.scale,
+            zoom: self.scale,
             _pad: 0,
         }
     }

@@ -166,6 +166,7 @@ impl ImageUploaded {
             dimension: wgpu::TextureDimension::D2,
             format: image.format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
             // specified format above supported by default, only additional view formats here
@@ -388,7 +389,7 @@ pub struct ImageMetadataRaw {
     pub _pad: u32,
 }
 
-#[expect(unused)]
+#[expect(unused, reason = "currently only ever used for debugging")]
 fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
     assert!(
         matches!(

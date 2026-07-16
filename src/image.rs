@@ -101,8 +101,10 @@ pub struct ImageLoaded {
 }
 
 impl ImageLoaded {
+    pub const FORMAT_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
     pub fn load(path: &Path) -> Result<Self, image::ImageError> {
-        Self::load_as(path, wgpu::TextureFormat::Rgba8UnormSrgb)
+        Self::load_as(path, Self::FORMAT_SRGB)
     }
 
     pub fn load_as(path: &Path, format: wgpu::TextureFormat) -> Result<Self, image::ImageError> {

@@ -6,12 +6,11 @@ use iced::wgpu::{self};
 use image::EncodableLayout as _;
 
 use crate::GpuContext;
-use crate::image::gpu::store_texture_as_image;
 
 pub struct MipMapper {
     pipeline_downsampling: wgpu::ComputePipeline,
     pipeline_convolution: wgpu::ComputePipeline,
-    texture_layout: wgpu::BindGroupLayout,
+    storage_layout: wgpu::BindGroupLayout,
     #[expect(unused)]
     kernel_layout: wgpu::BindGroupLayout,
 }
@@ -21,29 +20,34 @@ impl MipMapper {
     const SHADER_CONVOLUTION: &str = "package::mipmap::convolution";
 
     pub fn new(ctx: &GpuContext) -> Self {
-        let texture_layout = Self::create_texture_layout(ctx);
+        let storage_layout = Self::create_texture_storage_layout(ctx);
         let kernel_layout = Self::create_kernel_layout(ctx);
 
-        let pipeline_downsampling = Self::create_pipeline_downsampling(ctx, &texture_layout);
+        let pipeline_downsampling = Self::create_pipeline_downsampling(ctx, &storage_layout);
         let pipeline_convolution =
-            Self::create_pipeline_convolution(ctx, &texture_layout, &kernel_layout);
+            Self::create_pipeline_convolution(ctx, &storage_layout, &kernel_layout);
 
         Self {
             pipeline_downsampling,
             pipeline_convolution,
-            texture_layout,
+            storage_layout,
             kernel_layout,
         }
     }
 
     pub fn compute_mipmaps(&self, ctx: &GpuContext, texture: &wgpu::Texture) {
+        assert!(
+            texture.format().is_srgb(),
+            "expect sRGB textures (due to copy pipeline)"
+        );
+
         let Some(runner) = MipMapRunner::new(ctx, self, texture) else {
             return;
         };
         runner.run(ctx);
     }
 
-    fn create_texture_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
+    fn create_texture_storage_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
         ctx.device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("MipMapper Storage Texture Layout"),
@@ -103,13 +107,13 @@ impl MipMapper {
 
     fn create_pipeline_downsampling(
         ctx: &GpuContext,
-        texture_layout: &wgpu::BindGroupLayout,
+        storage_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::ComputePipeline {
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("MipMapper Downsampling Pipeline Layout"),
-                bind_group_layouts: &[texture_layout],
+                bind_group_layouts: &[storage_layout],
                 push_constant_ranges: &[],
             });
         let module = crate::gpu::create_simple_shader_module_desc(
@@ -130,14 +134,14 @@ impl MipMapper {
 
     fn create_pipeline_convolution(
         ctx: &GpuContext,
-        texture_layout: &wgpu::BindGroupLayout,
+        storage_layout: &wgpu::BindGroupLayout,
         kernel_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::ComputePipeline {
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("MipMapper Convolution Pipeline Layout"),
-                bind_group_layouts: &[texture_layout, kernel_layout],
+                bind_group_layouts: &[storage_layout, kernel_layout],
                 push_constant_ranges: &[],
             });
         let module = crate::gpu::create_simple_shader_module_desc(
@@ -160,6 +164,7 @@ impl MipMapper {
 struct MipMapRunner<'a> {
     mip_mapper: &'a MipMapper,
     texture: &'a wgpu::Texture,
+    copy_helper: StorageTextureCopyHelper,
     texture_filtered_1d: wgpu::Texture,
     texture_filtered_2d: wgpu::Texture,
     texture_downsampled: wgpu::Texture,
@@ -167,6 +172,8 @@ struct MipMapRunner<'a> {
 }
 
 impl<'a> MipMapRunner<'a> {
+    const FORMAT_STORAGE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
     fn new(
         ctx: &GpuContext,
         mip_mapper: &'a MipMapper,
@@ -174,11 +181,11 @@ impl<'a> MipMapRunner<'a> {
     ) -> Option<Self> {
         use wgpu::TextureFormat::*;
 
-        let sigma = 0.5;
+        const SIGMA: f32 = 0.5;
 
         assert!(
-            matches!(texture.format(), Rgba8Unorm | Rgba8UnormSrgb),
-            "unexpected texture format"
+            texture.format() == Rgba8UnormSrgb,
+            "only handling this format atm due to copy"
         );
 
         if texture.mip_level_count() == 1 {
@@ -195,11 +202,14 @@ impl<'a> MipMapRunner<'a> {
         let texture_downsampled = Self::create_storage_texture(ctx, texture, label);
 
         let kernel_layout = KernelBindGroupLayout::new(ctx);
-        let kernel_bind = KernelBinding::new(sigma, ctx, &kernel_layout);
+        let kernel_bind = KernelBinding::new(SIGMA, ctx, &kernel_layout);
+
+        let copy_helper = StorageTextureCopyHelper::new(ctx, texture.format());
 
         Some(Self {
             mip_mapper,
             texture,
+            copy_helper,
             texture_filtered_1d,
             texture_filtered_2d,
             texture_downsampled,
@@ -213,17 +223,13 @@ impl<'a> MipMapRunner<'a> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         // copy over start texture to base level in downsampled texture stack
-        {
-            let src = wgpu::TexelCopyTextureInfo {
-                mip_level: 0,
-                ..self.texture.as_image_copy()
-            };
-            let dst = wgpu::TexelCopyTextureInfo {
-                mip_level: 0,
-                ..self.texture_downsampled.as_image_copy()
-            };
-            encoder.copy_texture_to_texture(src, dst, self.texture.size());
-        }
+        self.copy_helper.to_storage(
+            ctx,
+            &mut encoder,
+            self.texture,
+            &self.texture_downsampled,
+            0,
+        );
 
         // run mip map construction
         {
@@ -241,30 +247,19 @@ impl<'a> MipMapRunner<'a> {
         }
 
         // copy computed mip maps over to texture
-        {
-            let full_size = self.texture.size();
-            for mip_level in 1..self.texture.mip_level_count() {
-                let size = wgpu::Extent3d {
-                    width: full_size.width >> mip_level, // divide by 2^mip_level
-                    height: full_size.height >> mip_level,
-                    depth_or_array_layers: 1,
-                };
-
-                let src = wgpu::TexelCopyTextureInfo {
-                    mip_level,
-                    ..self.texture_downsampled.as_image_copy()
-                };
-                let dst = wgpu::TexelCopyTextureInfo {
-                    mip_level,
-                    ..self.texture.as_image_copy()
-                };
-                encoder.copy_texture_to_texture(src, dst, size);
-            }
+        for mip_level in 1..self.texture.mip_level_count() {
+            self.copy_helper.to_texture(
+                ctx,
+                &mut encoder,
+                &self.texture_downsampled,
+                self.texture,
+                mip_level,
+            );
         }
 
         ctx.queue.submit([encoder.finish()]);
 
-        store_texture_as_image(ctx, self.texture, std::path::Path::new("debug.png"));
+        // store_texture_as_image(ctx, self.texture, std::path::Path::new("debug.png"));
     }
 
     fn run_filter_over_x(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
@@ -284,7 +279,7 @@ impl<'a> MipMapRunner<'a> {
             });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MipMapper Filter-1d Bind Group"),
-            layout: &self.mip_mapper.texture_layout,
+            layout: &self.mip_mapper.storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -326,7 +321,7 @@ impl<'a> MipMapRunner<'a> {
             });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MipMapper Filter-1d Bind Group"),
-            layout: &self.mip_mapper.texture_layout,
+            layout: &self.mip_mapper.storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -375,7 +370,7 @@ impl<'a> MipMapRunner<'a> {
             });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MipMapper Downsampling BindGroup"),
-            layout: &self.mip_mapper.texture_layout,
+            layout: &self.mip_mapper.storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -409,9 +404,10 @@ impl<'a> MipMapRunner<'a> {
             mip_level_count: base.mip_level_count(),
             sample_count: base.sample_count(),
             dimension: base.dimension(),
-            format: base.format().remove_srgb_suffix(),
+            format: Self::FORMAT_STORAGE,
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
@@ -569,7 +565,7 @@ impl KernelBinding {
     }
 }
 
-pub struct KernelBindGroupLayout(wgpu::BindGroupLayout);
+struct KernelBindGroupLayout(wgpu::BindGroupLayout);
 
 impl KernelBindGroupLayout {
     pub fn new(ctx: &GpuContext) -> Self {
@@ -614,13 +610,245 @@ impl std::ops::Deref for KernelBindGroupLayout {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct KernelInfoRaw {
+struct KernelInfoRaw {
     /// Axis to apply the kernel on (x for 0, y for 1)
-    pub axis: u32,
+    axis: u32,
     /// How much the kernel is offset from the target location
     ///
     /// In the (1-dimensional) formula `SUM_i [K(i) * T(p - o + i)]`, where p is the target
     /// location, K is the kernel array and T is the texture array, corresponds to the offset
     /// o.
-    pub offset: u32,
+    offset: u32,
+}
+
+struct StorageTextureCopyHelper {
+    texture_layout: wgpu::BindGroupLayout,
+    texture_to_storage: wgpu::RenderPipeline,
+    storage_to_texture: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+}
+
+impl StorageTextureCopyHelper {
+    const SHADER_COPY_VERTEX: &str = "package::image::quad";
+    const SHADER_COPY_FRAGMENT: &str = "package::mipmap::texture_copy";
+
+    fn new(ctx: &GpuContext, format: wgpu::TextureFormat) -> Self {
+        let texture_layout = Self::create_texture_layout(ctx);
+        let (texture_to_storage, storage_to_texture) =
+            Self::create_copy_pipelines(ctx, &texture_layout, format);
+
+        let sampler = Self::create_copy_sampler(ctx);
+
+        Self {
+            texture_layout,
+            texture_to_storage,
+            storage_to_texture,
+            sampler,
+        }
+    }
+
+    fn to_storage(
+        &self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        mip_level: u32,
+    ) {
+        self.run_internal(ctx, encoder, src, dst, mip_level, &self.texture_to_storage);
+    }
+
+    fn to_texture(
+        &self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        mip_level: u32,
+    ) {
+        self.run_internal(ctx, encoder, src, dst, mip_level, &self.storage_to_texture);
+    }
+
+    fn run_internal(
+        &self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        mip_level: u32,
+        pipeline: &wgpu::RenderPipeline,
+    ) {
+        assert_eq!(
+            src.size(),
+            dst.size(),
+            "copy render expects to transfer pixels 1-by-1"
+        );
+
+        let src_view = src.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: mip_level,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        let dst_view = dst.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: mip_level,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Copy to Storage BindGroup"),
+            layout: &self.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Copy to Storage Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &dst_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..wgpu::RenderPassDescriptor::default()
+        });
+
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &texture_bind_group, &[]);
+        pass.draw(0..4, 0..1);
+    }
+
+    fn create_texture_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
+        ctx.device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Copy Pipeline Texture Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            })
+    }
+
+    fn create_copy_pipelines(
+        ctx: &GpuContext,
+        texture_layout: &wgpu::BindGroupLayout,
+        original_format: wgpu::TextureFormat,
+    ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MipMapper Copy Pipeline Layout"),
+                bind_group_layouts: &[texture_layout],
+                push_constant_ranges: &[],
+            });
+
+        let vs_module = crate::gpu::create_simple_shader_module_desc(
+            Some("Quad Shader"),
+            Self::SHADER_COPY_VERTEX,
+        );
+        let vs_module = ctx.device.create_shader_module(vs_module);
+
+        let fs_module = crate::gpu::create_simple_shader_module_desc(
+            Some("Copy Fragment Shader"),
+            Self::SHADER_COPY_FRAGMENT,
+        );
+        let fs_module = ctx.device.create_shader_module(fs_module);
+
+        let to_storage_pipeline =
+            ctx.device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Copy to Storage Pipeline"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &vs_module,
+                        entry_point: Some("vs_quad"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        ..Default::default()
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &fs_module,
+                        entry_point: Some("fs_copy"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: MipMapRunner::FORMAT_STORAGE,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::default(),
+                        })],
+                    }),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                    cache: None,
+                });
+
+        let to_texture_pipeline =
+            ctx.device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Copy to Texture Pipeline"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &vs_module,
+                        entry_point: Some("vs_quad"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        ..Default::default()
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &fs_module,
+                        entry_point: Some("fs_copy"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: original_format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::default(),
+                        })],
+                    }),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                    cache: None,
+                });
+
+        (to_storage_pipeline, to_texture_pipeline)
+    }
+
+    fn create_copy_sampler(ctx: &GpuContext) -> wgpu::Sampler {
+        ctx.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Copy Sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..wgpu::SamplerDescriptor::default()
+        })
+    }
 }

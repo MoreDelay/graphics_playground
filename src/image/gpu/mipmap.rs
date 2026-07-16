@@ -6,6 +6,7 @@ use iced::wgpu::{self};
 use image::EncodableLayout as _;
 
 use crate::GpuContext;
+use crate::image::gpu::store_texture_as_image;
 
 pub struct MipMapper {
     pipeline_downsampling: wgpu::ComputePipeline,
@@ -16,8 +17,8 @@ pub struct MipMapper {
 }
 
 impl MipMapper {
-    const SHADER_DOWNSAMPLING: &str = "package::mipmapper";
-    const SHADER_CONVOLUTION: &str = "package::convolution";
+    const SHADER_HALFING: &str = "package::mipmap::halfing";
+    const SHADER_CONVOLUTION: &str = "package::mipmap::convolution";
 
     pub fn new(ctx: &GpuContext) -> Self {
         let texture_layout = Self::create_texture_layout(ctx);
@@ -111,9 +112,9 @@ impl MipMapper {
                 bind_group_layouts: &[texture_layout],
                 push_constant_ranges: &[],
             });
-        let module = super::create_shader_module_desc(
+        let module = crate::gpu::create_simple_shader_module_desc(
             Some("Downsampling Shader"),
-            Self::SHADER_DOWNSAMPLING,
+            Self::SHADER_HALFING,
         );
         let module = ctx.device.create_shader_module(module);
         ctx.device
@@ -121,7 +122,7 @@ impl MipMapper {
                 label: Some("MipMapper Downsampling Pipeline"),
                 layout: Some(&layout),
                 module: &module,
-                entry_point: Some("compute_mipmap"),
+                entry_point: Some("halfing"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             })
@@ -139,15 +140,17 @@ impl MipMapper {
                 bind_group_layouts: &[texture_layout, kernel_layout],
                 push_constant_ranges: &[],
             });
-        let module =
-            super::create_shader_module_desc(Some("Convolution Shader"), Self::SHADER_CONVOLUTION);
+        let module = crate::gpu::create_simple_shader_module_desc(
+            Some("Convolution Shader"),
+            Self::SHADER_CONVOLUTION,
+        );
         let module = ctx.device.create_shader_module(module);
         ctx.device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("MipMapper Convolution Pipeline"),
                 layout: Some(&layout),
                 module: &module,
-                entry_point: Some("apply_kernel"),
+                entry_point: Some("convolve"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             })
@@ -171,7 +174,7 @@ impl<'a> MipMapRunner<'a> {
     ) -> Option<Self> {
         use wgpu::TextureFormat::*;
 
-        let sigma = 1.0;
+        let sigma = 0.5;
 
         assert!(
             matches!(texture.format(), Rgba8Unorm | Rgba8UnormSrgb),
@@ -260,6 +263,8 @@ impl<'a> MipMapRunner<'a> {
         }
 
         ctx.queue.submit([encoder.finish()]);
+
+        store_texture_as_image(ctx, self.texture, std::path::Path::new("debug.png"));
     }
 
     fn run_filter_over_x(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
@@ -406,6 +411,7 @@ impl<'a> MipMapRunner<'a> {
             dimension: base.dimension(),
             format: base.format().remove_srgb_suffix(),
             usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],

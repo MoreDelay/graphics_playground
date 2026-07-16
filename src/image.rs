@@ -297,6 +297,7 @@ impl ImageDrawState {
 
         self.offset = LogicalPosition::new(x, y);
         self.scale = scale;
+        println!("scale: {scale}");
 
         // when the image is at the border, it might move out of frame by zooming
         self.clamp_offset();

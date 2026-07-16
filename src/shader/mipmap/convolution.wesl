@@ -19,7 +19,7 @@ var<uniform> kernel_info: KernelInfo;
 
 @compute
 @workgroup_size(16, 16, 1)
-fn apply_kernel(
+fn convolve(
     @builtin(global_invocation_id) gid: vec3<u32>,
 ) {
     let dim = textureDimensions(src);

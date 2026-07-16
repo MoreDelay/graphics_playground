@@ -10,8 +10,6 @@ use image::ImageBuffer;
 use super::ImageLoaded;
 use crate::GpuContext;
 
-const SHADER_ROOT: &str = "src/shader";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageFilter {
     BiLinear,
@@ -44,7 +42,8 @@ pub struct ImagePipeline {
 }
 
 impl ImagePipeline {
-    const SHADER: &str = "package::image";
+    const SHADER_VERTEX: &str = "package::image::quad";
+    const SHADER_FRAGMENT: &str = "package::image::render";
 
     pub fn new(
         ctx: &GpuContext,
@@ -53,18 +52,22 @@ impl ImagePipeline {
         meta_layout: &ImageMetadataBindGroupLayout,
         features: ImagePipelineFeatures,
     ) -> Self {
-        let shader_module = &Self::SHADER.parse().expect("module path invalid");
-        let shader_module = wesl::Wesl::new(SHADER_ROOT)
+        let vs_module =
+            crate::gpu::create_simple_shader_module_desc(Some("Quad Shader"), Self::SHADER_VERTEX);
+        let vs_module = ctx.device.create_shader_module(vs_module);
+
+        let fs_module = &Self::SHADER_FRAGMENT.parse().expect("module path invalid");
+        let fs_module = wesl::Wesl::new(crate::gpu::SHADER_ROOT)
             .set_features(features.into_iter())
-            .compile(shader_module)
+            .compile(fs_module)
             .inspect_err(|e| eprintln!("WESL error: {e}"))
             .expect("shader invalid")
             .to_string();
-        let shader_module = wgpu::ShaderModuleDescriptor {
+        let fs_module = wgpu::ShaderModuleDescriptor {
             label: Some("ColorNormalShader"),
-            source: wgpu::ShaderSource::Wgsl(shader_module.into()),
+            source: wgpu::ShaderSource::Wgsl(fs_module.into()),
         };
-        let shader_module = ctx.device.create_shader_module(shader_module);
+        let fs_module = ctx.device.create_shader_module(fs_module);
 
         let pipeline_layout = ctx
             .device
@@ -80,14 +83,14 @@ impl ImagePipeline {
                 label: Some("Image Pipeline"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &shader_module,
-                    entry_point: Some("vs_main"),
+                    module: &vs_module,
+                    entry_point: Some("vs_quad"),
                     buffers: &[],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader_module,
-                    entry_point: Some("fs_main"),
+                    module: &fs_module,
+                    entry_point: Some("fs_image"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: output_format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -385,22 +388,6 @@ pub struct ImageMetadataRaw {
     pub _pad: u32,
 }
 
-fn create_shader_module_desc<'a>(
-    label: Option<&'a str>,
-    wesl_path: &str,
-) -> wgpu::ShaderModuleDescriptor<'a> {
-    let compute_module = wesl_path.parse().expect("module path invalid");
-    let compute_module = wesl::Wesl::new(SHADER_ROOT)
-        .compile(&compute_module)
-        .inspect_err(|e| eprintln!("WESL error: {e}"))
-        .expect("shader invalid")
-        .to_string();
-    wgpu::ShaderModuleDescriptor {
-        label,
-        source: wgpu::ShaderSource::Wgsl(compute_module.into()),
-    }
-}
-
 #[expect(unused)]
 fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
     assert!(
@@ -411,9 +398,9 @@ fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path:
         "only rgba supported atm"
     );
 
-    let mip_level = 0;
-    let width = texture.width();
-    let height = texture.height();
+    let mip_level = 1;
+    let width = texture.width() / 2;
+    let height = texture.height() / 2;
 
     let size = width * height * 4;
     let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {

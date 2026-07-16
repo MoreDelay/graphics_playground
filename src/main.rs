@@ -1,4 +1,5 @@
 mod controls;
+mod gpu;
 mod image;
 mod scene;
 

@@ -25,7 +25,7 @@ pub fn create_simple_shader_module_desc<'a>(
 }
 
 #[expect(unused, reason = "currently only ever used for debugging")]
-fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
+pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
     assert!(
         matches!(
             texture.format(),
@@ -34,9 +34,9 @@ fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path:
         "only rgba supported atm"
     );
 
-    let mip_level = 1;
-    let width = texture.width() / 2;
-    let height = texture.height() / 2;
+    let mip_level = 0;
+    let width = texture.width();
+    let height = texture.height();
 
     let size = width * height * 4;
     let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {

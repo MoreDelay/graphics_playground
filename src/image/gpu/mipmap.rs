@@ -259,8 +259,6 @@ impl<'a> MipMapRunner<'a> {
         }
 
         ctx.queue.submit([encoder.finish()]);
-
-        // store_texture_as_image(ctx, self.texture, std::path::Path::new("debug.png"));
     }
 
     fn run_filter_over_x(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {

@@ -248,6 +248,10 @@ impl ImageRenderState {
                 self.lanczos.filter(ctx, src.texture(), &dst);
                 let dst = gpu::Texture::new(ctx, dst, &self.texture_layout);
                 self.image = ImagePresentTexture::Prepared(dst, Some(src));
+
+                let filter = gpu::ImageFilter::Nearest;
+                let features = gpu::ImagePipelineFeatures { filter };
+                self.update_pipeline_normal(ctx, features);
             }
 
             (

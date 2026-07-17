@@ -18,11 +18,13 @@ var<uniform> image_info: ImageInfo;
 @binding(0)
 var src: texture_2d<f32>;
 
+const PI = radians(180.0);
+
 fn sinc(x: f32) -> f32 {
     if x == 0. {
         return 1.;
     }
-    return sin(x) / x;
+    return sin(PI * x) / (PI * x);
 }
 
 fn lanczos_weight(x: f32, a: f32) -> f32 {
@@ -46,6 +48,7 @@ fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
     let n_samples = a_u * 2;
 
     var value: vec4<f32> = vec4(0., 0., 0., 0.);
+    var weights: f32 = 0.;
 
     for (var i: u32 = 0; i < n_samples; i++) {
         let sample_x = pos_u.x - a_u + 1 + i;
@@ -65,10 +68,11 @@ fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
             let weight = weight_x * weight_y;
 
             value += weight * sample;
+            weights += weight;
         }
     }
 
-    return value;
+    return value / weights;
 }
 
 

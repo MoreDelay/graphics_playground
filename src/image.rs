@@ -141,7 +141,8 @@ impl WidgetState {
     ) {
         self.draw_state.viewport = viewport;
         let features = self.draw_state.pipeline_features();
-        self.render_state.update_pipeline(ctx, features);
+        self.render_state
+            .update_pipeline(ctx, features, &self.draw_state);
         self.render_state
             .draw(ctx, render_pass, &self.draw_state, scale_factor);
     }
@@ -170,12 +171,27 @@ impl WidgetState {
     }
 }
 
+enum ImagePresentTexture {
+    Direct(Option<gpu::ImageUploaded>),
+    Prepared(gpu::Texture, Option<gpu::ImageUploaded>),
+}
+
+impl ImagePresentTexture {
+    fn bind_group(&self) -> &wgpu::BindGroup {
+        match self {
+            Self::Direct(uploaded) => uploaded.as_ref().expect("always some").bind_group(),
+            Self::Prepared(texture, _) => texture.bind_group(),
+        }
+    }
+}
+
 struct ImageRenderState {
-    image: gpu::ImageUploaded,
+    image: ImagePresentTexture,
     texture_layout: gpu::TextureBindGroupLayout,
     meta_layout: gpu::ImageMetadataBindGroupLayout,
     meta_bind: gpu::ImageMetadataBinding,
     pipeline: gpu::ImagePipeline,
+    lanczos: gpu::lanczos::Interpolator,
 }
 
 impl ImageRenderState {
@@ -189,25 +205,65 @@ impl ImageRenderState {
         let meta_bind = gpu::ImageMetadataBinding::new(ctx, &meta_layout);
 
         let texture_layout = gpu::TextureBindGroupLayout::new(ctx);
-        let image = gpu::ImageUploaded::upload(image, ctx, &texture_layout);
+        let image = ImagePresentTexture::Direct(Some(gpu::ImageUploaded::upload(
+            image,
+            ctx,
+            &texture_layout,
+        )));
 
         let format = target.config.format;
         let pipeline =
             gpu::ImagePipeline::new(ctx, format, &texture_layout, &meta_layout, features);
+
+        let lanczos = gpu::lanczos::Interpolator::new(ctx);
+
         Self {
             image,
             texture_layout,
             meta_layout,
             meta_bind,
             pipeline,
+            lanczos,
         }
     }
 
-    fn update_pipeline(&mut self, ctx: &GpuContext, features: gpu::ImagePipelineFeatures) {
-        if self.pipeline.features() == features {
-            return;
-        }
+    fn update_pipeline(
+        &mut self,
+        ctx: &GpuContext,
+        features: gpu::ImagePipelineFeatures,
+        draw_state: &ImageDrawState,
+    ) {
+        match (&mut self.image, features.filter) {
+            (
+                ImagePresentTexture::Direct(_),
+                gpu::ImageFilter::Nearest | gpu::ImageFilter::BiLinear,
+            ) => self.update_pipeline_normal(ctx, features),
 
+            (ImagePresentTexture::Direct(uploaded), gpu::ImageFilter::Lanczos) => {
+                let src = uploaded.take().expect("option only for this purpose");
+
+                let size = draw_state.size * draw_state.scale;
+                let dst = Self::create_lanczos_target_texture(ctx, size);
+
+                self.lanczos.filter(ctx, src.texture(), &dst);
+                let dst = gpu::Texture::new(ctx, dst, &self.texture_layout);
+                self.image = ImagePresentTexture::Prepared(dst, Some(src));
+            }
+
+            (
+                ImagePresentTexture::Prepared(_, uploaded),
+                gpu::ImageFilter::Nearest | gpu::ImageFilter::BiLinear,
+            ) => {
+                self.image = ImagePresentTexture::Direct(Some(
+                    uploaded.take().expect("option only for this purpose"),
+                ));
+                self.update_pipeline_normal(ctx, features);
+            }
+            (ImagePresentTexture::Prepared(_, _), gpu::ImageFilter::Lanczos) => (),
+        }
+    }
+
+    fn update_pipeline_normal(&mut self, ctx: &GpuContext, features: gpu::ImagePipelineFeatures) {
         let out_format = self.pipeline.output_format();
         self.pipeline = gpu::ImagePipeline::new(
             ctx,
@@ -216,6 +272,27 @@ impl ImageRenderState {
             &self.meta_layout,
             features,
         );
+    }
+
+    fn create_lanczos_target_texture(ctx: &GpuContext, size: iced::Size) -> wgpu::Texture {
+        #[expect(clippy::cast_possible_truncation)]
+        let size = wgpu::Extent3d {
+            width: size.width.ceil() as u32,
+            height: size.height.ceil() as u32,
+            depth_or_array_layers: 1,
+        };
+        ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Lanczos Texture"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: ImageLoaded::FORMAT_SRGB,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
     }
 
     fn draw(
@@ -331,8 +408,9 @@ impl ImageDrawState {
 
     fn cycle_filters(&mut self) {
         self.filter = match self.filter {
-            gpu::ImageFilter::BiLinear => gpu::ImageFilter::Nearest,
             gpu::ImageFilter::Nearest => gpu::ImageFilter::BiLinear,
+            gpu::ImageFilter::BiLinear => gpu::ImageFilter::Lanczos,
+            gpu::ImageFilter::Lanczos => gpu::ImageFilter::Nearest,
         };
         println!("Filter: {:?}", self.filter);
     }

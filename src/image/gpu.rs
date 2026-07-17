@@ -1,3 +1,4 @@
+pub mod lanczos;
 mod mipmap;
 
 use std::num::NonZeroU64;
@@ -10,9 +11,10 @@ use crate::GpuContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageFilter {
-    BiLinear,
     #[default]
     Nearest,
+    BiLinear,
+    Lanczos,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -25,8 +27,9 @@ impl ImagePipelineFeatures {
         let mut features = vec![];
 
         match self.filter {
-            ImageFilter::BiLinear => features.push(("FILTER_BILINEAR", true)),
             ImageFilter::Nearest => (),
+            ImageFilter::BiLinear => features.push(("FILTER_BILINEAR", true)),
+            ImageFilter::Lanczos => (),
         }
 
         features.into_iter()
@@ -35,7 +38,6 @@ impl ImagePipelineFeatures {
 
 pub struct ImagePipeline {
     pipeline: wgpu::RenderPipeline,
-    features: ImagePipelineFeatures,
     output_format: wgpu::TextureFormat,
 }
 
@@ -113,17 +115,12 @@ impl ImagePipeline {
 
         Self {
             pipeline,
-            features,
             output_format,
         }
     }
 
     pub const fn output_format(&self) -> wgpu::TextureFormat {
         self.output_format
-    }
-
-    pub const fn features(&self) -> ImagePipelineFeatures {
-        self.features
     }
 }
 
@@ -197,33 +194,40 @@ impl ImageUploaded {
         let mipmapper = mipmap::MipMapper::new(ctx);
         mipmapper.compute_mipmaps(ctx, &texture);
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let entries = [wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(&view),
-        }];
-        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout,
-            entries: &entries,
-        });
-        let texture = Texture {
-            _inner: texture,
-            _view: view,
-            bind_group,
-        };
+        let texture = Texture::new(ctx, texture, layout);
 
         Self { texture }
+    }
+
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.inner
     }
 }
 
 pub struct Texture {
-    _inner: wgpu::Texture,
+    inner: wgpu::Texture,
     _view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
 }
 
 impl Texture {
+    pub fn new(ctx: &GpuContext, texture: wgpu::Texture, layout: &TextureBindGroupLayout) -> Self {
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Texture Bind Group"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        Self {
+            inner: texture,
+            _view: view,
+            bind_group,
+        }
+    }
+
     pub const fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
     }

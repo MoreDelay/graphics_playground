@@ -321,7 +321,7 @@ impl<'a> MipMapRunner<'a> {
                 ..Default::default()
             });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MipMapper Filter-1d Bind Group"),
+            label: Some("MipMapper Filter-2d Bind Group"),
             layout: &self.mip_mapper.storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {

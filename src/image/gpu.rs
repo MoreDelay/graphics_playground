@@ -1,13 +1,11 @@
 pub mod lanczos;
 mod mipmap;
 
-use std::num::NonZeroU64;
-
 use iced::wgpu;
-use iced::wgpu::util::DeviceExt as _;
 
 use super::ImageLoaded;
 use crate::GpuContext;
+use crate::gpu::SimpleBuffer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageFilter {
@@ -235,8 +233,8 @@ impl Texture {
 
 pub struct ImageMetadataBinding {
     bind_group: wgpu::BindGroup,
-    viewport: wgpu::Buffer,
-    image_meta: wgpu::Buffer,
+    viewport: SimpleBuffer<ViewportRaw>,
+    image_meta: SimpleBuffer<ImageMetadataRaw>,
 }
 
 impl ImageMetadataBinding {
@@ -247,26 +245,14 @@ impl ImageMetadataBinding {
             scale: 1.,
             _pad: 0,
         };
-        let viewport = ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Viewport Buffer"),
-                contents: bytemuck::cast_slice(&[viewport]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+        let viewport = SimpleBuffer::new(ctx, viewport, Some("Viewport Buffer"));
 
         let image_meta = ImageMetadataRaw {
             start: [0., 0.],
             zoom: 1.,
             _pad: 0,
         };
-        let image_meta = ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ImageMetadata Buffer"),
-                contents: bytemuck::cast_slice(&[image_meta]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+        let image_meta = SimpleBuffer::new(ctx, image_meta, Some("ImageMetadata Buffer"));
 
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Metadata Bind Group"),
@@ -274,11 +260,11 @@ impl ImageMetadataBinding {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: viewport.as_entire_binding(),
+                    resource: viewport.resource(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: image_meta.as_entire_binding(),
+                    resource: image_meta.resource(),
                 },
             ],
         });
@@ -289,25 +275,12 @@ impl ImageMetadataBinding {
         }
     }
 
-    pub fn update_viewport(&self, ctx: &GpuContext, viewport_raw: &ViewportRaw) {
-        const VIEWPORT_SIZE: NonZeroU64 =
-            NonZeroU64::new(std::mem::size_of::<ViewportRaw>() as u64).expect("struct not empty");
-
-        ctx.queue
-            .write_buffer_with(&self.viewport, 0, VIEWPORT_SIZE)
-            .expect("failed creating temporary buffer for upload")
-            .copy_from_slice(bytemuck::cast_slice(&[*viewport_raw]));
+    pub fn update_viewport(&self, ctx: &GpuContext, data: ViewportRaw) {
+        self.viewport.update(ctx, data);
     }
 
-    pub fn update_image_metadata(&self, ctx: &GpuContext, image_meta_raw: &ImageMetadataRaw) {
-        const IMAGE_META_SIZE: NonZeroU64 =
-            NonZeroU64::new(std::mem::size_of::<ImageMetadataRaw>() as u64)
-                .expect("struct not empty");
-
-        ctx.queue
-            .write_buffer_with(&self.image_meta, 0, IMAGE_META_SIZE)
-            .expect("failed creating temporary buffer for upload")
-            .copy_from_slice(bytemuck::cast_slice(&[*image_meta_raw]));
+    pub fn update_image_metadata(&self, ctx: &GpuContext, data: ImageMetadataRaw) {
+        self.image_meta.update(ctx, data);
     }
 }
 

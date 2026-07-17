@@ -1,9 +1,7 @@
-use std::num::NonZeroU64;
-
-use iced::wgpu::util::DeviceExt as _;
-use iced::wgpu::{self};
+use iced::wgpu;
 
 use crate::GpuContext;
+use crate::gpu::SimpleBuffer;
 use crate::image::ImageLoaded;
 
 pub struct Interpolator {
@@ -11,8 +9,8 @@ pub struct Interpolator {
     meta_layout: wgpu::BindGroupLayout,
     image_layout: wgpu::BindGroupLayout,
     #[expect(unused)]
-    lanczos_buffer: wgpu::Buffer,
-    image_buffer: wgpu::Buffer,
+    lanczos_buffer: SimpleBuffer<LanczosInfoRaw>,
+    image_buffer: SimpleBuffer<ImageInfoRaw>,
     meta_bind: wgpu::BindGroup,
     pipeline_interpolate: wgpu::RenderPipeline,
 }
@@ -27,8 +25,10 @@ impl Interpolator {
         let pipeline_interpolate =
             Self::create_pipeline_interpolate(ctx, &meta_layout, &image_layout);
 
-        let lanczos_buffer = Self::create_lanczos_buffer(ctx);
-        let image_buffer = Self::create_image_buffer(ctx);
+        let contents = LanczosInfoRaw { filter_size: 1. };
+        let lanczos_buffer = SimpleBuffer::new(ctx, contents, Some("Lanczos Info Buffer"));
+        let contents = ImageInfoRaw { new_size: [1, 1] };
+        let image_buffer = SimpleBuffer::new(ctx, contents, Some("Lanczos Image Info Buffer"));
         let meta_bind = Self::create_meta_bind(ctx, &meta_layout, &lanczos_buffer, &image_buffer);
 
         Self {
@@ -42,9 +42,6 @@ impl Interpolator {
     }
 
     pub fn filter(&self, ctx: &GpuContext, src: &wgpu::Texture, dst: &wgpu::Texture) {
-        const IMAGE_INFO_SIZE: NonZeroU64 =
-            NonZeroU64::new(std::mem::size_of::<ImageInfoRaw>() as u64).expect("struct not empty");
-
         assert!(
             src.usage().contains(wgpu::TextureUsages::TEXTURE_BINDING),
             "src is used as texture binding here"
@@ -58,10 +55,7 @@ impl Interpolator {
             let image_raw = ImageInfoRaw {
                 new_size: [dst.width(), dst.height()],
             };
-            ctx.queue
-                .write_buffer_with(&self.image_buffer, 0, IMAGE_INFO_SIZE)
-                .expect("failed creating temporary buffer for upload")
-                .copy_from_slice(bytemuck::cast_slice(&[image_raw]));
+            self.image_buffer.update(ctx, image_raw);
         }
 
         let src_view = src.create_view(&wgpu::TextureViewDescriptor::default());
@@ -133,16 +127,6 @@ impl Interpolator {
             })
     }
 
-    fn create_lanczos_buffer(ctx: &GpuContext) -> wgpu::Buffer {
-        let contents = LanczosInfoRaw { filter_size: 1. };
-        ctx.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Lanczos Info Buffer"),
-                contents: bytemuck::cast_slice(&[contents]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            })
-    }
-
     fn create_image_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
         ctx.device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -160,21 +144,11 @@ impl Interpolator {
             })
     }
 
-    fn create_image_buffer(ctx: &GpuContext) -> wgpu::Buffer {
-        let contents = ImageInfoRaw { new_size: [1, 1] };
-        ctx.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Lanczos Image Info Buffer"),
-                contents: bytemuck::cast_slice(&[contents]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            })
-    }
-
     fn create_meta_bind(
         ctx: &GpuContext,
         layout: &wgpu::BindGroupLayout,
-        lanczos_buffer: &wgpu::Buffer,
-        image_buffer: &wgpu::Buffer,
+        lanczos_buffer: &SimpleBuffer<LanczosInfoRaw>,
+        image_buffer: &SimpleBuffer<ImageInfoRaw>,
     ) -> wgpu::BindGroup {
         ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Lanczos Meta Bind Group"),
@@ -182,19 +156,11 @@ impl Interpolator {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: lanczos_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
+                    resource: lanczos_buffer.resource(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: image_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
+                    resource: image_buffer.resource(),
                 },
             ],
         })

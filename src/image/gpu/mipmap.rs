@@ -1,11 +1,10 @@
 use core::f32;
-use std::num::NonZeroU64;
 
-use iced::wgpu::util::DeviceExt as _;
-use iced::wgpu::{self};
+use iced::wgpu;
 use image::EncodableLayout as _;
 
 use crate::GpuContext;
+use crate::gpu::SimpleBuffer;
 use crate::image::filters::GaussFilter;
 
 pub struct MipMapper {
@@ -418,7 +417,7 @@ struct KernelBinding {
     bind_group: wgpu::BindGroup,
     #[expect(unused)]
     storage_texture: wgpu::Texture,
-    buffer: wgpu::Buffer,
+    buffer: SimpleBuffer<KernelInfoRaw>,
     kernel_size: u32,
 }
 
@@ -442,13 +441,7 @@ impl KernelBinding {
             axis: 0,
             offset: kernel_size / 2,
         };
-        let buffer = ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("KernelInfo Buffer"),
-                contents: bytemuck::cast_slice(&[data]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+        let buffer = SimpleBuffer::new(ctx, data, Some("KernelInfo Buffer"));
         let entries = &[
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -456,7 +449,7 @@ impl KernelBinding {
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buffer.as_entire_binding(),
+                resource: buffer.resource(),
             },
         ];
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -474,20 +467,11 @@ impl KernelBinding {
     }
 
     fn set_axis(&self, ctx: &GpuContext, axis: Axis) {
-        const SIZE: NonZeroU64 =
-            NonZeroU64::new(std::mem::size_of::<KernelInfoRaw>() as u64).expect("struct not empty");
-
         let data = KernelInfoRaw {
             axis: axis as u32,
             offset: self.kernel_size / 2,
         };
-
-        let mut view = ctx
-            .queue
-            .write_buffer_with(&self.buffer, 0, SIZE)
-            .expect("failed creating temporary buffer for upload");
-
-        view.copy_from_slice(bytemuck::cast_slice(&[data]));
+        self.buffer.update(ctx, data);
     }
 
     const fn bind_group(&self) -> &wgpu::BindGroup {

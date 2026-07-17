@@ -307,9 +307,9 @@ impl ImageRenderState {
         scale_factor: f64,
     ) {
         self.meta_bind
-            .update_viewport(ctx, &state.build_viewport_raw(scale_factor));
+            .update_viewport(ctx, state.build_viewport_raw(scale_factor));
         self.meta_bind
-            .update_image_metadata(ctx, &state.build_image_metadata_raw(scale_factor));
+            .update_image_metadata(ctx, state.build_image_metadata_raw(scale_factor));
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, self.image.bind_group(), &[]);

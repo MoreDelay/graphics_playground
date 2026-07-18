@@ -170,9 +170,12 @@ impl Ready {
 
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
-                    label: None,
+                    label: Some("Main Device"),
                     required_features,
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: wgpu::Limits {
+                        max_texture_dimension_2d: 16384,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::MemoryUsage,
                     trace: wgpu::Trace::Off,
                     experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -332,10 +335,12 @@ impl Ready {
         );
 
         // Draw the scene with wgpu now.
-        let mut encoder = self
-            .gpu_ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder =
+            self.gpu_ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Frame Draw Command Encoder"),
+                });
 
         let scale_factor = self.target_ctx.window.scale_factor();
         self.controls

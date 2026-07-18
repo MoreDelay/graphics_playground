@@ -165,7 +165,7 @@ impl Controls {
         let bounds = super::image::inset_to_rectangle(bounds, scale_factor);
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
+            label: Some("Main Image Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 depth_slice: None,

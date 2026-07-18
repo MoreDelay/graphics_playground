@@ -61,7 +61,7 @@ pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_p
 
     let size = width * height * 4;
     let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
+        label: Some("Debug Image Temporary Buffer"),
         size: size as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,

@@ -36,11 +36,11 @@ fn lanczos_weight(x: f32, a: f32) -> f32 {
 
 @fragment
 fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
-    let old_size = vec2<f32>(textureDimensions(src));
-    let new_size = vec2<f32>(image_info.new_size);
+    let old_max = vec2<f32>(textureDimensions(src) - vec2(1, 1));
+    let new_max = vec2<f32>(image_info.new_size - vec2(1, 1));
 
     // our image samples will be placed at integer values
-    let pos_f = (pos_new.xy - vec2(0.5, 0.5)) * (old_size / new_size);
+    let pos_f = (pos_new.xy - vec2(0.5, 0.5)) * (old_max / new_max);
     let pos_u = vec2<u32>(pos_f);
 
     let a_f = lanczos_info.filter_size;

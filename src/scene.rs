@@ -42,14 +42,14 @@ impl RenderWidget {
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
+                label: Some("Scene Render Pipeline Layout"),
                 push_constant_ranges: &[],
                 bind_group_layouts: &[],
             });
 
         ctx.device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("Scene Render Pipeline"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &vs_module,

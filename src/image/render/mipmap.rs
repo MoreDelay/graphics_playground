@@ -219,7 +219,9 @@ impl<'a> MipMapRunner<'a> {
     fn run(self, ctx: &GpuContext) {
         let mut encoder = ctx
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Mipmap Command Encoder"),
+            });
 
         // copy over start texture to base level in downsampled texture stack
         self.copy_helper.to_storage(

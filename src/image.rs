@@ -433,7 +433,6 @@ impl ImageRenderState {
         if self.basis == data {
             return;
         }
-        println!("update!");
         self.viewport_buffer.update(ctx, data.raw_viewport());
 
         match (data.filter, &self.prepared) {
@@ -493,9 +492,9 @@ impl PreparedImage {
         original: &wgpu::Texture,
     ) -> Self {
         #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let width = ((original.width() as f32) * zoom).ceil() as u32;
+        let width = ((original.width() as f32) * zoom) as u32;
         #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let height = ((original.height() as f32) * zoom).ceil() as u32;
+        let height = ((original.height() as f32) * zoom) as u32;
         let size = wgpu::Extent3d {
             width,
             height,

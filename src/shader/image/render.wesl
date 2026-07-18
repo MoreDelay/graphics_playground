@@ -1,7 +1,6 @@
 struct Viewport {
     origin: vec2<u32>,
     size: vec2<u32>,
-    scale: f32, // scale factor of monitor
 }
 
 struct ImageInfo {

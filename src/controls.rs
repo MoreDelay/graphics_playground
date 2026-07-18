@@ -9,9 +9,9 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize};
 
+use crate::gpu::{GpuContext, TargetContext};
 use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
 use crate::scene::RenderWidget;
-use crate::{GpuContext, TargetContext};
 
 pub struct Controls {
     // Bounds in a cell so that we can update its value with the computed layout from iced by
@@ -112,7 +112,8 @@ impl Controls {
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Drag(offset)) => {
-                widget.pan(offset);
+                let message = ImageMessage::Pan { offset };
+                widget.update(message);
             }
             (CurrentScene::Image(widget), Message::KeyPress(key)) => {
                 let cursor = cursor.position();
@@ -215,7 +216,7 @@ impl CurrentScene {
         let mut widget = ImageWidget::new();
         if let Some(path) = path {
             match ImageLoaded::load(path) {
-                Ok(image) => widget.set_image(image, ctx, target),
+                Ok(image) => widget.set_image(ctx, target, image),
                 Err(err) => eprintln!("could not load image: {err}"),
             }
         }

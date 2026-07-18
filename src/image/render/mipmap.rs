@@ -3,8 +3,7 @@ use core::f32;
 use iced::wgpu;
 use image::EncodableLayout as _;
 
-use crate::GpuContext;
-use crate::gpu::SimpleBuffer;
+use crate::gpu::{GpuContext, SimpleBuffer};
 use crate::image::filters::GaussFilter;
 
 pub struct MipMapper {

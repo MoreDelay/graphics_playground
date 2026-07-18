@@ -1,7 +1,6 @@
 use iced::wgpu;
 
-use crate::GpuContext;
-use crate::gpu::SimpleBuffer;
+use crate::gpu::{GpuContext, SimpleBuffer};
 use crate::image::ImageLoaded;
 
 pub struct Interpolator {

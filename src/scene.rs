@@ -1,7 +1,7 @@
 use iced_wgpu::wgpu;
 use iced_winit::core::Color;
 
-use crate::{GpuContext, TargetContext};
+use crate::gpu::{GpuContext, TargetContext};
 
 pub struct RenderWidget {
     pipeline: wgpu::RenderPipeline,

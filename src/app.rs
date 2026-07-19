@@ -84,10 +84,13 @@ impl winit::application::ApplicationHandler for Runner {
         }
 
         // Map window event to iced event
-        #[expect(clippy::cast_possible_truncation)]
-        let scale_factor = ready.target_ctx.window.scale_factor() as f32;
-        if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
-            ready.events.push(event);
+        let scale_factor = ready.target_ctx.window.scale_factor();
+        {
+            #[expect(clippy::cast_possible_truncation)]
+            let scale_factor = scale_factor as f32;
+            if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
+                ready.events.push(event);
+            }
         }
 
         // If there are events pending
@@ -127,18 +130,21 @@ impl winit::application::ApplicationHandler for Runner {
 }
 
 struct Ready {
+    // context objects
     gpu_ctx: GpuContext,
     target_ctx: TargetContext,
-    renderer: Renderer,
+    // state of gui
     controls: Controls,
-    events: Vec<Event>,
     cursor: Cursor,
+    modifiers: ModifiersState,
+    resized: bool,
+    // objects used by iced but otherwise unused
+    renderer: Renderer,
+    events: Vec<Event>,
     dragging: DraggingState,
     cache: Cache,
     clipboard: Clipboard,
     viewport: Viewport,
-    modifiers: ModifiersState,
-    resized: bool,
 }
 
 impl Ready {
@@ -239,19 +245,27 @@ impl Ready {
 
         // You should change this if you want to render continuously
         event_loop.set_control_flow(ControlFlow::Wait);
+
+        let cursor = Cursor::Unavailable;
+        let modifiers = ModifiersState::default();
+        let events = Vec::new();
+        let dragging = DraggingState::default();
+        let cache = Cache::new();
+        let resized = false;
+
         Self {
             gpu_ctx,
             target_ctx,
-            renderer,
             controls,
-            events: Vec::new(),
-            cursor: Cursor::Unavailable,
-            dragging: DraggingState::default(),
-            modifiers: ModifiersState::default(),
-            cache: Cache::new(),
+            cursor,
+            modifiers,
+            resized,
+            renderer,
+            events,
+            dragging,
+            cache,
             clipboard,
             viewport,
-            resized: false,
         }
     }
 
@@ -261,6 +275,7 @@ impl Ready {
             self.resized = false;
         }
 
+        let scale_factor = self.target_ctx.window.scale_factor();
         let frame = match self.target_ctx.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(error) => {
@@ -342,7 +357,6 @@ impl Ready {
                     label: Some("Frame Draw Command Encoder"),
                 });
 
-        let scale_factor = self.target_ctx.window.scale_factor();
         self.controls
             .draw_wgpu(&self.gpu_ctx, &view, &mut encoder, scale_factor);
 

@@ -86,7 +86,7 @@ impl RenderNearestPipeline {
             .expect("shader invalid")
             .to_string();
         let fs_module = wgpu::ShaderModuleDescriptor {
-            label: Some("ColorNormalShader"),
+            label: Some("Nearest Image Shader Module"),
             source: wgpu::ShaderSource::Wgsl(fs_module.into()),
         };
         let fs_module = ctx.device.create_shader_module(fs_module);
@@ -134,20 +134,17 @@ impl RenderNearestPipeline {
 struct RenderBilinearPipeline(wgpu::RenderPipeline);
 
 impl RenderBilinearPipeline {
-    const SHADER_VERTEX: &str = "package::image::quad";
-    const SHADER_FRAGMENT: &str = "package::image::render";
-
     fn new(
         ctx: &GpuContext,
         pipeline_layout: &wgpu::PipelineLayout,
         output_format: wgpu::TextureFormat,
     ) -> Self {
         let vs_module =
-            crate::gpu::create_simple_shader_module_desc(Some("Quad Shader"), Self::SHADER_VERTEX);
+            crate::gpu::create_simple_shader_module_desc(Some("Quad Shader"), SHADER_VERTEX_QUAD);
         let vs_module = ctx.device.create_shader_module(vs_module);
 
         let fs_features = [("FILTER_BILINEAR", true)];
-        let fs_module = &Self::SHADER_FRAGMENT.parse().expect("module path invalid");
+        let fs_module = &SHADER_FRAGMENT_RENDER.parse().expect("module path invalid");
         let fs_module = wesl::Wesl::new(SHADER_ROOT)
             .set_features(fs_features)
             .compile(fs_module)
@@ -155,7 +152,7 @@ impl RenderBilinearPipeline {
             .expect("shader invalid")
             .to_string();
         let fs_module = wgpu::ShaderModuleDescriptor {
-            label: Some("ColorNormalShader"),
+            label: Some("Bilinear Image Shader Module"),
             source: wgpu::ShaderSource::Wgsl(fs_module.into()),
         };
         let fs_module = ctx.device.create_shader_module(fs_module);
@@ -163,7 +160,7 @@ impl RenderBilinearPipeline {
         let pipeline = ctx
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Image Pipeline"),
+                label: Some("Image Bilinear Pipeline"),
                 layout: Some(pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &vs_module,

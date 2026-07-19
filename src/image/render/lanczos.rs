@@ -24,7 +24,7 @@ impl Interpolator {
         let pipeline_interpolate =
             Self::create_pipeline_interpolate(ctx, &meta_layout, &image_layout);
 
-        let contents = LanczosInfoRaw { filter_size: 1. };
+        let contents = LanczosInfoRaw { filter_size: 2. };
         let lanczos_buffer = SimpleBuffer::new(ctx, contents, Some("Lanczos Info Buffer"));
         let contents = ImageInfoRaw { new_size: [1, 1] };
         let image_buffer = SimpleBuffer::new(ctx, contents, Some("Lanczos Image Info Buffer"));

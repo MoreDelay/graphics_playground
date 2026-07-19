@@ -1,5 +1,7 @@
+import package::vertex::VertexOut;
+
 @vertex
-fn vs_quad(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
+fn vs_quad(@builtin(vertex_index) in_vertex_index: u32) -> VertexOut {
     // generate quad as triangle strip of 4 vertices
     var pos: vec4<f32> = vec4<f32>(-1., -1., 0., 1.);
     var uv: vec2<f32> = vec2<f32>(0., 1.);
@@ -18,6 +20,9 @@ fn vs_quad(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) ve
         uv.y = 0.;
     }
 
-    return pos;
+    var out: VertexOut;
+    out.pos = pos;
+    out.uv = uv;
+    return out;
 }
 

@@ -19,7 +19,6 @@ use crate::gpu::bind::{
     ImageMetadataRaw,
     SingleTextureBind,
     SingleTextureLayout,
-    ViewportRaw,
 };
 use crate::gpu::pipeline::{ImageRenderPipelines, PipelineChoice};
 use crate::gpu::{GpuContext, SimpleBuffer, TargetContext};
@@ -68,7 +67,7 @@ pub enum ImageMessage {
     },
     SetZoom {
         cursor: Option<iced::Point>,
-        scale: f32,
+        zoom: f32,
     },
     ZoomIn {
         cursor: Option<iced::Point>,
@@ -83,9 +82,9 @@ pub enum ImageMessage {
 impl ImageMessage {
     pub fn from_key(key: &SmolStr, cursor: Option<iced::Point>) -> Option<Self> {
         match key.as_str() {
-            "1" => Some(Self::SetZoom { cursor, scale: 1. }),
-            "2" => Some(Self::SetZoom { cursor, scale: 2. }),
-            "9" => Some(Self::SetZoom { cursor, scale: 0.5 }),
+            "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
+            "2" => Some(Self::SetZoom { cursor, zoom: 2. }),
+            "9" => Some(Self::SetZoom { cursor, zoom: 0.5 }),
             "s" => Some(Self::ResetPosition),
             "f" => Some(Self::CycleFilters),
             "-" => Some(Self::ZoomOut { cursor }),
@@ -214,7 +213,7 @@ impl WidgetState {
     pub fn draw(
         &mut self,
         ctx: &GpuContext,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut wgpu::RenderPass<'_>,
         viewport: LogicalInsets<f32>,
         scale_factor: f64,
     ) {
@@ -229,13 +228,13 @@ impl WidgetState {
         };
         match self.filter {
             ImageFilter::Nearest => self.pipelines.draw(
-                render_pass,
+                pass,
                 PipelineChoice::Nearest,
                 &render.original_bind,
                 &render.buffer_bind,
             ),
             ImageFilter::BiLinear => self.pipelines.draw(
-                render_pass,
+                pass,
                 PipelineChoice::Bilinear,
                 &render.original_bind,
                 &render.buffer_bind,
@@ -246,12 +245,8 @@ impl WidgetState {
                     .as_ref()
                     .expect("must be set by update above")
                     .bind;
-                self.pipelines.draw(
-                    render_pass,
-                    PipelineChoice::Nearest,
-                    prepared,
-                    &render.buffer_bind,
-                );
+                self.pipelines
+                    .draw(pass, PipelineChoice::Nearest, prepared, &render.buffer_bind);
             }
         }
     }
@@ -259,9 +254,9 @@ impl WidgetState {
     pub fn update(&mut self, message: ImageMessage) {
         match message {
             ImageMessage::Pan { offset } => self.pan(offset),
-            ImageMessage::SetZoom { scale, cursor } => {
+            ImageMessage::SetZoom { zoom, cursor } => {
                 let cursor = self.widget_pos(cursor);
-                self.set_zoom(scale, cursor);
+                self.set_zoom(zoom, cursor);
             }
             ImageMessage::ZoomIn { cursor } => {
                 let cursor = self.widget_pos(cursor);
@@ -391,7 +386,6 @@ struct ImageRenderState {
     original_bind: SingleTextureBind,
     prepared: Option<PreparedImage>,
 
-    viewport_buffer: SimpleBuffer<ViewportRaw>,
     metadata_buffer: SimpleBuffer<ImageMetadataRaw>,
     buffer_bind: ImageMetadataBind,
 
@@ -404,16 +398,12 @@ impl ImageRenderState {
         let original = image.upload(ctx);
         let original_bind = SingleTextureBind::new(ctx, &texture_layout, &original);
 
-        let viewport_buffer = basis.raw_viewport();
-        let viewport_buffer = SimpleBuffer::new(ctx, viewport_buffer, Some("Viewport Buffer"));
-
         let metadata_buffer = basis.raw_metadata();
         let metadata_buffer =
             SimpleBuffer::new(ctx, metadata_buffer, Some("Image Metadata Buffer"));
 
         let buffer_bind_layout = ImageMetadataLayout::new(ctx);
-        let buffer_bind =
-            ImageMetadataBind::new(ctx, &buffer_bind_layout, &viewport_buffer, &metadata_buffer);
+        let buffer_bind = ImageMetadataBind::new(ctx, &buffer_bind_layout, &metadata_buffer);
 
         let lanczos = render::lanczos::Interpolator::new(ctx);
 
@@ -422,7 +412,6 @@ impl ImageRenderState {
             original,
             original_bind,
             prepared: None,
-            viewport_buffer,
             metadata_buffer,
             buffer_bind,
             lanczos,
@@ -433,7 +422,6 @@ impl ImageRenderState {
         if self.basis == data {
             return;
         }
-        self.viewport_buffer.update(ctx, data.raw_viewport());
 
         match (data.filter, &self.prepared) {
             (ImageFilter::Nearest | ImageFilter::BiLinear, _) => {
@@ -542,16 +530,6 @@ struct DrawData {
 }
 
 impl DrawData {
-    const fn raw_viewport(&self) -> ViewportRaw {
-        let width = self.viewport.right - self.viewport.left;
-        let height = self.viewport.bottom - self.viewport.top;
-
-        ViewportRaw {
-            origin: [self.viewport.left, self.viewport.top],
-            size: [width, height],
-        }
-    }
-
     const fn raw_metadata(&self) -> ImageMetadataRaw {
         ImageMetadataRaw {
             start: [self.offset.x, self.offset.y],
@@ -569,21 +547,5 @@ impl std::ops::Deref for WidgetPos {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-pub fn inset_to_rectangle(inset: LogicalInsets<f32>, scale_factor: f64) -> iced::Rectangle {
-    let PhysicalInsets {
-        top,
-        left,
-        bottom,
-        right,
-    } = inset.to_physical(scale_factor);
-
-    iced::Rectangle {
-        x: left,
-        y: top,
-        width: right - left,
-        height: bottom - top,
     }
 }

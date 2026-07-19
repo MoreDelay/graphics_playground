@@ -7,20 +7,12 @@ use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
-use iced_winit::winit::dpi::{LogicalInsets, LogicalSize};
+use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
+use crate::gpu::pipeline::{PassThruPipeline, PassThruTexture};
 use crate::gpu::{GpuContext, TargetContext};
 use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
 use crate::scene::RenderWidget;
-
-pub struct Controls {
-    // Bounds in a cell so that we can update its value with the computed layout from iced by
-    // passing a reference to the widget's draw call. The layout system gives us logical
-    // coordinates, so store them as such.
-    scene_bounds: Cell<Option<LogicalInsets<f32>>>,
-    scene: CurrentScene,
-    image: Option<PathBuf>,
-}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -32,14 +24,30 @@ pub enum Message {
     KeyPress(SmolStr),
 }
 
+pub struct Controls {
+    /// Bounds in a cell so that we can update its value with the computed layout from iced by
+    /// passing a reference to the widget's draw call. The layout system gives us logical
+    /// coordinates, so store them as such.
+    scene_bounds: Cell<Option<LogicalInsets<f32>>>,
+    passthru_pipeline: PassThruPipeline,
+    render_target: Option<PassThruTexture>,
+    scene: CurrentScene,
+    image: Option<PathBuf>,
+}
+
 impl Controls {
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let scene_bounds = Cell::new(None);
+        let passthru_pipeline = PassThruPipeline::new(ctx, target.config.format);
+        let render_target = None;
         let scene = CurrentScene::scene(ctx, target);
+        let image = None;
         Self {
             scene_bounds,
+            passthru_pipeline,
+            render_target,
             scene,
-            image: None,
+            image,
         }
     }
 
@@ -132,7 +140,7 @@ impl Controls {
         }
     }
 
-    /// Should be called after [`Controls::view`] to know the viewport bounds.
+    /// Must be called after [`Controls::view`] to know the viewport bounds.
     pub fn draw_wgpu(
         &mut self,
         ctx: &GpuContext,
@@ -140,32 +148,92 @@ impl Controls {
         encoder: &mut wgpu::CommandEncoder,
         scale_factor: f64,
     ) {
-        let bounds = self.scene_bounds.take().unwrap_or_else(|| LogicalInsets {
-            top: 0.,
-            left: 0.,
-            #[expect(clippy::cast_precision_loss)]
-            bottom: view.texture().height() as f32,
-            #[expect(clippy::cast_precision_loss)]
-            right: view.texture().width() as f32,
-        });
+        let Some(bounds) = self.scene_bounds.take() else {
+            eprintln!("TRIED TO DRAW WITH NO SCENE BOUNDS!");
+            return;
+        };
 
-        let mut render_pass = Self::start_render_pass(view, encoder, bounds, scale_factor);
-        match &mut self.scene {
-            CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
-            CurrentScene::Image(image) => image.draw(ctx, &mut render_pass, bounds, scale_factor),
+        let size = {
+            let bounds = bounds.to_physical::<u32>(scale_factor);
+            let width = bounds.right - bounds.left + 1;
+            let height = bounds.bottom - bounds.top + 1;
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            }
+        };
+
+        if self
+            .render_target
+            .as_ref()
+            .is_none_or(|target| target.texture().size() != size)
+        {
+            self.render_target = Some(self.passthru_pipeline.create_texture(ctx, size));
         }
+        let render_target = self.render_target.as_ref().expect("just set above");
+
+        {
+            let mut render_pass = Self::start_render_pass(render_target.view(), encoder);
+            match &mut self.scene {
+                CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
+                CurrentScene::Image(image) => {
+                    image.draw(ctx, &mut render_pass, bounds, scale_factor);
+                }
+            }
+        }
+        self.render_to_viewport(
+            view,
+            encoder,
+            render_target,
+            bounds.to_physical(scale_factor),
+        );
     }
 
     fn start_render_pass<'a>(
         target: &'a wgpu::TextureView,
         encoder: &'a mut wgpu::CommandEncoder,
-        bounds: LogicalInsets<f32>,
-        scale_factor: f64,
     ) -> wgpu::RenderPass<'a> {
-        let bounds = super::image::inset_to_rectangle(bounds, scale_factor);
-
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Main Image Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        })
+    }
+
+    fn render_to_viewport<'a>(
+        &self,
+        target: &'a wgpu::TextureView,
+        encoder: &'a mut wgpu::CommandEncoder,
+        render_target: &PassThruTexture,
+        bounds: PhysicalInsets<f32>,
+    ) {
+        let PhysicalInsets {
+            top,
+            left,
+            bottom,
+            right,
+        } = bounds;
+
+        let bounds = iced::Rectangle {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        };
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("PassThru Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 depth_slice: None,
@@ -181,16 +249,9 @@ impl Controls {
         });
 
         // limit rendering to the scene bounds
-        render_pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
-        // #[expect(clippy::cast_possible_truncation)]
-        // render_pass.set_scissor_rect(
-        //     bounds.x.floor() as u32,
-        //     bounds.y.floor() as u32,
-        //     bounds.width.ceil() as u32,
-        //     bounds.height.ceil() as u32,
-        // );
+        pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
 
-        render_pass
+        self.passthru_pipeline.draw(&mut pass, render_target);
     }
 
     fn pick_image_dialog() -> Option<PathBuf> {

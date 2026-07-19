@@ -6,5 +6,4 @@ pub use image::{
     ImageMetadataRaw,
     SingleTextureBind,
     SingleTextureLayout,
-    ViewportRaw,
 };

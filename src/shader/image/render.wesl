@@ -1,8 +1,3 @@
-struct Viewport {
-    origin: vec2<u32>,
-    size: vec2<u32>,
-}
-
 struct ImageInfo {
     start: vec2<f32>,
     zoom: f32,
@@ -12,8 +7,6 @@ struct ImageInfo {
 var t_image: texture_2d<f32>;
 
 @group(1) @binding(0)
-var<uniform> viewport: Viewport;
-@group(1) @binding(1)
 var<uniform> image_info: ImageInfo;
 
 fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
@@ -63,7 +56,7 @@ fn filter_nearest(pos: vec2<f32>) -> vec4<f32> {
 fn fs_image(@builtin(position) in: vec4<f32>) -> @location(0) vec4<f32> {
     // `viewport_pos` is the current pixel location (center, ending in .5) in viewport coordinates.
     // This can be casted to vec2<u32> for discrete locations.
-    let viewport_pos = (in.xy - vec2<f32>(viewport.origin));
+    let viewport_pos = in.xy;
     let image_pos = (viewport_pos - image_info.start) / image_info.zoom;
 
     @if(FILTER_BILINEAR)

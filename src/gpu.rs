@@ -59,17 +59,24 @@ pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_p
     let width = texture.width();
     let height = texture.height();
 
-    let size = width * height * 4;
+    let bytes_per_row = 4 * width;
+    let real_size = height * bytes_per_row;
+
+    let padded_bytes_per_row = bytes_per_row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let padded_size = height * padded_bytes_per_row;
+
     let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Debug Image Temporary Buffer"),
-        size: size as u64,
+        size: padded_size as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
 
     let mut encoder = ctx
         .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Debug Image Encoder"),
+        });
 
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
@@ -82,7 +89,7 @@ pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_p
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * width),
+                bytes_per_row: Some(padded_bytes_per_row),
                 rows_per_image: Some(height),
             },
         },
@@ -103,7 +110,12 @@ pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_p
             .expect("single threaded wait should succeed");
 
         let data = slice.get_mapped_range();
-        let image = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, data)
+        let image = data
+            .chunks_exact(padded_bytes_per_row as usize)
+            .flat_map(|c| &c[..bytes_per_row as usize])
+            .copied()
+            .collect::<Vec<_>>();
+        let image = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, image)
             .expect("texture should fit into specified dimensions, checked before");
         image.save(image_path).expect("saving to disk should work");
     }

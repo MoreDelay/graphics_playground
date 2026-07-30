@@ -155,8 +155,9 @@ impl Controls {
 
         let size = {
             let bounds = bounds.to_physical::<u32>(scale_factor);
-            let width = bounds.right - bounds.left + 1;
-            let height = bounds.bottom - bounds.top + 1;
+            // confirmed with a checkerboard image that this is the physical size of the viewport
+            let width = bounds.right - bounds.left;
+            let height = bounds.bottom - bounds.top;
             wgpu::Extent3d {
                 width,
                 height,

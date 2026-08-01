@@ -5,13 +5,8 @@ use std::path::Path;
 
 use iced::wgpu;
 use iced_wgpu::core::SmolStr;
-use iced_winit::winit::dpi::{
-    LogicalInsets,
-    LogicalPosition,
-    PhysicalInsets,
-    PhysicalPosition,
-    PhysicalSize,
-};
+use iced_winit::winit::dpi::PhysicalSize;
+use nalgebra as na;
 
 use crate::gpu::bind::{
     ImageMetadataBind,
@@ -20,7 +15,8 @@ use crate::gpu::bind::{
     SingleTextureBind,
     SingleTextureLayout,
 };
-use crate::gpu::pipeline::{ImageRenderPipelines, PipelineChoice};
+use crate::gpu::pipeline::{ImageRenderPipelines, PassThruTexture, PipelineChoice};
+use crate::gpu::viewport::{VPPoint, VPVector, Viewport};
 use crate::gpu::{GpuContext, SimpleBuffer, TargetContext};
 use crate::image::render::ImageFilter;
 use crate::image::render::lanczos::Interpolator;
@@ -41,16 +37,14 @@ impl ImageWidget {
         self.data = Some(data);
     }
 
-    pub fn draw(
+    pub fn current_render_output(
         &mut self,
         ctx: &GpuContext,
-        render_pass: &mut wgpu::RenderPass<'_>,
-        viewport: LogicalInsets<f32>,
-        scale_factor: f64,
-    ) {
-        if let Some(data) = &mut self.data {
-            data.draw(ctx, render_pass, viewport, scale_factor);
-        }
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: &Viewport,
+    ) -> Option<&PassThruTexture> {
+        let data = self.data.as_mut()?;
+        data.current_render_output(ctx, encoder, viewport)
     }
 
     pub fn update(&mut self, message: ImageMessage) {
@@ -62,25 +56,16 @@ impl ImageWidget {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ImageMessage {
-    Pan {
-        offset: iced::Vector,
-    },
-    SetZoom {
-        cursor: Option<iced::Point>,
-        zoom: f32,
-    },
-    ZoomIn {
-        cursor: Option<iced::Point>,
-    },
-    ZoomOut {
-        cursor: Option<iced::Point>,
-    },
+    Pan { offset: VPVector },
+    SetZoom { cursor: Option<VPPoint>, zoom: f32 },
+    ZoomIn { cursor: Option<VPPoint> },
+    ZoomOut { cursor: Option<VPPoint> },
     ResetPosition,
     CycleFilters,
 }
 
 impl ImageMessage {
-    pub fn from_key(key: &SmolStr, cursor: Option<iced::Point>) -> Option<Self> {
+    pub fn from_key(key: &SmolStr, cursor: Option<VPPoint>) -> Option<Self> {
         match key.as_str() {
             "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
             "2" => Some(Self::SetZoom { cursor, zoom: 2. }),
@@ -186,9 +171,10 @@ struct WidgetState {
     image: ImageLoaded,
     pipelines: ImageRenderPipelines,
     render_state: Option<ImageRenderState>,
+    render_output: Option<PassThruTexture>,
 
     // persistent state
-    offset: LogicalPosition<f32>,
+    offset: na::Vector2<f32>,
     zoom: f32,
     filter: ImageFilter,
 }
@@ -200,25 +186,25 @@ impl WidgetState {
 
     pub fn new(ctx: &GpuContext, target: &TargetContext, image: ImageLoaded) -> Self {
         let pipelines = ImageRenderPipelines::new(ctx, target.config.format);
+        let offset = na::Vector2::default();
         Self {
             image,
             pipelines,
             render_state: None,
-            offset: LogicalPosition::default(),
+            render_output: None,
+            offset,
             zoom: 1.,
             filter: ImageFilter::Nearest,
         }
     }
 
-    pub fn draw(
+    pub fn render(
         &mut self,
         ctx: &GpuContext,
-        pass: &mut wgpu::RenderPass<'_>,
-        viewport: LogicalInsets<f32>,
-        scale_factor: f64,
+        encoder: &mut wgpu::CommandEncoder,
+        output: &PassThruTexture,
+        draw_data: DrawData,
     ) {
-        let draw_data = self.create_draw_data(viewport, scale_factor);
-
         let render = if let Some(render) = self.render_state.as_mut() {
             render.update(ctx, draw_data);
             render
@@ -226,15 +212,32 @@ impl WidgetState {
             self.render_state = Some(ImageRenderState::new(ctx, &self.image, draw_data));
             self.render_state.as_mut().expect("just set above")
         };
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Main Image Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output.view(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
         match self.filter {
             ImageFilter::Nearest => self.pipelines.draw(
-                pass,
+                &mut pass,
                 PipelineChoice::Nearest,
                 &render.original_bind,
                 &render.buffer_bind,
             ),
             ImageFilter::BiLinear => self.pipelines.draw(
-                pass,
+                &mut pass,
                 PipelineChoice::Bilinear,
                 &render.original_bind,
                 &render.buffer_bind,
@@ -245,59 +248,87 @@ impl WidgetState {
                     .as_ref()
                     .expect("must be set by update above")
                     .bind;
-                self.pipelines
-                    .draw(pass, PipelineChoice::Nearest, prepared, &render.buffer_bind);
+                self.pipelines.draw(
+                    &mut pass,
+                    PipelineChoice::Nearest,
+                    prepared,
+                    &render.buffer_bind,
+                );
             }
         }
+    }
+
+    pub fn current_render_output(
+        &mut self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: &Viewport,
+    ) -> Option<&PassThruTexture> {
+        let last_output = self.render_output.take();
+        let expected_size = viewport.extent()?;
+
+        let next_output = if let Some(output) = last_output
+            && output.texture().size() == expected_size
+        {
+            output
+        } else {
+            viewport.create_texture(ctx)?
+        };
+
+        let draw_data = self.create_draw_data(viewport.size()?);
+        match self.render_state.as_ref() {
+            Some(render_state) if render_state.basis == draw_data => {}
+            _ => self.render(ctx, encoder, &next_output, draw_data),
+        }
+
+        self.render_output = Some(next_output);
+        self.render_output.as_ref()
     }
 
     pub fn update(&mut self, message: ImageMessage) {
         match message {
             ImageMessage::Pan { offset } => self.pan(offset),
             ImageMessage::SetZoom { zoom, cursor } => {
-                let cursor = self.widget_pos(cursor);
-                self.set_zoom(zoom, cursor);
+                let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
+                self.set_zoom(zoom, fixed_point);
             }
             ImageMessage::ZoomIn { cursor } => {
-                let cursor = self.widget_pos(cursor);
-                self.zoom_in(cursor);
+                let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
+                self.zoom_in(fixed_point);
             }
             ImageMessage::ZoomOut { cursor } => {
-                let cursor = self.widget_pos(cursor);
-                self.zoom_out(cursor);
+                let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
+                self.zoom_out(fixed_point);
             }
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
         }
     }
 
-    fn zoom_in(&mut self, fix_point: WidgetPos) {
+    fn zoom_in(&mut self, fix_point: VPPoint) {
         let zoom = self.zoom * Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
     }
 
-    fn zoom_out(&mut self, fix_point: WidgetPos) {
+    fn zoom_out(&mut self, fix_point: VPPoint) {
         let zoom = self.zoom / Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
     }
 
-    fn set_zoom(&mut self, zoom: f32, fix_point: WidgetPos) {
+    fn set_zoom(&mut self, zoom: f32, fix_point: VPPoint) {
         let zoom = zoom.clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
 
         // get offset in fix-point coordinates (where fix-point is the origin)
-        let x = self.offset.x - fix_point.x;
-        let y = self.offset.y - fix_point.y;
+        let offset = self.offset - fix_point.coords;
 
         // scale up offset position by actual difference of scale factor
         let factor = zoom / self.zoom;
-        let x = x * factor;
-        let y = y * factor;
+        let offset = offset * factor;
 
         // return back to viewport coordinates
-        let x = x + fix_point.x;
-        let y = y + fix_point.y;
+        let offset = offset + fix_point.coords;
 
-        self.offset = LogicalPosition::new(x, y);
+        self.offset = offset;
         self.zoom = zoom;
         println!("zoom: {zoom}");
 
@@ -305,14 +336,14 @@ impl WidgetState {
         self.clamp_offset();
     }
 
-    fn pan(&mut self, offset: iced::Vector) {
+    fn pan(&mut self, offset: VPVector) {
         self.offset.x += offset.x;
         self.offset.y += offset.y;
         self.clamp_offset();
     }
 
     fn reset_pos(&mut self) {
-        self.offset = LogicalPosition::default();
+        self.offset = na::Vector2::zeros();
     }
 
     fn cycle_filters(&mut self) {
@@ -329,7 +360,7 @@ impl WidgetState {
         const FILLED_PERCENT: f32 = 0.1;
 
         let Some(render) = self.render_state.as_ref() else {
-            self.offset = LogicalPosition::new(0., 0.);
+            self.offset = na::Vector2::zeros();
             return;
         };
         let viewport = render.basis.viewport;
@@ -337,9 +368,9 @@ impl WidgetState {
         let size = self.image.size();
 
         #[expect(clippy::cast_precision_loss)]
-        let width = (viewport.right - viewport.left) as f32;
+        let width = viewport.width as f32;
         #[expect(clippy::cast_precision_loss)]
-        let height = (viewport.bottom - viewport.top) as f32;
+        let height = viewport.height as f32;
 
         #[expect(clippy::cast_precision_loss)]
         let x_min = width.mul_add(FILLED_PERCENT, -self.zoom * size.width as f32);
@@ -351,28 +382,13 @@ impl WidgetState {
         let y_max = height * (1. - FILLED_PERCENT);
         let y = self.offset.y.clamp(y_min, y_max);
 
-        self.offset = LogicalPosition::new(x, y);
+        self.offset = na::Vector2::new(x, y);
     }
 
-    fn widget_pos(&self, cursor: Option<iced::Point>) -> WidgetPos {
-        let (Some(cursor), Some(render)) = (cursor, self.render_state.as_ref()) else {
-            return WidgetPos(LogicalPosition::default());
-        };
-        let viewport = render.basis.viewport;
-
-        #[expect(clippy::cast_precision_loss)]
-        let offset = iced::Vector {
-            x: viewport.left as f32,
-            y: viewport.top as f32,
-        };
-        let iced::Point { x, y } = cursor - offset;
-        WidgetPos(LogicalPosition::new(x, y))
-    }
-
-    fn create_draw_data(&self, viewport: LogicalInsets<f32>, scale_factor: f64) -> DrawData {
+    fn create_draw_data(&self, viewport: PhysicalSize<u32>) -> DrawData {
         DrawData {
-            viewport: viewport.to_physical(scale_factor),
-            offset: self.offset.to_physical(scale_factor),
+            viewport,
+            offset: self.offset,
             size: self.image.size(),
             zoom: self.zoom,
             filter: self.filter,
@@ -516,9 +532,9 @@ struct DrawData {
     /// Widget location and size as determined by iced layout.
     ///
     /// Needed to transform window to widget coordinates.
-    viewport: PhysicalInsets<u32>,
+    viewport: PhysicalSize<u32>,
     /// Image starts at this offset from the top left corner of the viewport.
-    offset: PhysicalPosition<f32>,
+    offset: na::Vector2<f32>,
     /// Size of the image.
     size: PhysicalSize<u32>,
     /// Image is scaled by this factor.
@@ -530,22 +546,11 @@ struct DrawData {
 }
 
 impl DrawData {
-    const fn raw_metadata(&self) -> ImageMetadataRaw {
+    fn raw_metadata(&self) -> ImageMetadataRaw {
         ImageMetadataRaw {
             start: [self.offset.x, self.offset.y],
             zoom: self.zoom,
             _pad: 0,
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WidgetPos(LogicalPosition<f32>);
-
-impl std::ops::Deref for WidgetPos {
-    type Target = LogicalPosition<f32>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }

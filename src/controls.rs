@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use iced::advanced::mouse::Cursor;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
@@ -9,7 +8,7 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
-use crate::gpu::pipeline::{PassThruPipeline, PassThruTexture};
+use crate::gpu::viewport::{VPPoint, VPVector, Viewport};
 use crate::gpu::{GpuContext, TargetContext};
 use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
 use crate::scene::RenderWidget;
@@ -20,7 +19,7 @@ pub enum Message {
     SelectFile,
     ScrollUp,
     ScrollDown,
-    Drag(iced::Vector),
+    Drag(VPVector),
     KeyPress(SmolStr),
 }
 
@@ -28,9 +27,8 @@ pub struct Controls {
     /// Bounds in a cell so that we can update its value with the computed layout from iced by
     /// passing a reference to the widget's draw call. The layout system gives us logical
     /// coordinates, so store them as such.
-    scene_bounds: Cell<Option<LogicalInsets<f32>>>,
-    passthru_pipeline: PassThruPipeline,
-    render_target: Option<PassThruTexture>,
+    scene_bounds: Cell<Option<PhysicalInsets<u32>>>,
+    viewport: Viewport,
     scene: CurrentScene,
     image: Option<PathBuf>,
 }
@@ -38,20 +36,18 @@ pub struct Controls {
 impl Controls {
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let scene_bounds = Cell::new(None);
-        let passthru_pipeline = PassThruPipeline::new(ctx, target.config.format);
-        let render_target = None;
+        let viewport = Viewport::new(ctx, target.config.format);
         let scene = CurrentScene::scene(ctx, target);
         let image = None;
         Self {
             scene_bounds,
-            passthru_pipeline,
-            render_target,
+            viewport,
             scene,
             image,
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message, Theme, Renderer> {
+    pub fn view(&self, scale_factor: f64) -> Element<'_, Message, Theme, Renderer> {
         use iced::Length::{Fill, Shrink};
 
         self.scene_bounds.set(None);
@@ -62,7 +58,11 @@ impl Controls {
         };
 
         let bounds = &self.scene_bounds;
-        let placeholder = PlaceholderWidget { bounds, bg_color };
+        let placeholder = PlaceholderWidget {
+            bounds,
+            bg_color,
+            scale_factor,
+        };
         let scene = Element::new(placeholder);
 
         row![
@@ -87,7 +87,7 @@ impl Controls {
         message: Message,
         ctx: &GpuContext,
         target: &TargetContext,
-        cursor: &Cursor,
+        cursor: Option<VPPoint>,
     ) {
         match (&mut self.scene, message) {
             (CurrentScene::Scene(_), Message::SwitchScene) => {
@@ -110,12 +110,10 @@ impl Controls {
                 self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
-                let cursor = cursor.position();
                 let message = ImageMessage::ZoomIn { cursor };
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::ScrollDown) => {
-                let cursor = cursor.position();
                 let message = ImageMessage::ZoomOut { cursor };
                 widget.update(message);
             }
@@ -124,7 +122,6 @@ impl Controls {
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::KeyPress(key)) => {
-                let cursor = cursor.position();
                 let Some(message) = ImageMessage::from_key(&key, cursor) else {
                     return;
                 };
@@ -141,118 +138,38 @@ impl Controls {
     }
 
     /// Must be called after [`Controls::view`] to know the viewport bounds.
-    pub fn draw_wgpu(
-        &mut self,
-        ctx: &GpuContext,
-        view: &wgpu::TextureView,
-        encoder: &mut wgpu::CommandEncoder,
-        scale_factor: f64,
-    ) {
+    pub fn draw_wgpu(&mut self, ctx: &GpuContext, view: &wgpu::TextureView) {
         let Some(bounds) = self.scene_bounds.take() else {
             eprintln!("TRIED TO DRAW WITH NO SCENE BOUNDS!");
             return;
         };
 
-        let size = {
-            let bounds = bounds.to_physical::<u32>(scale_factor);
-            // confirmed with a checkerboard image that this is the physical size of the viewport
-            let width = bounds.right - bounds.left;
-            let height = bounds.bottom - bounds.top;
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
+        self.viewport.resize(bounds);
+
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Frame Draw Command Encoder"),
+            });
+
+        let output = match &mut self.scene {
+            CurrentScene::Scene(scene) => {
+                scene.current_render_output(ctx, &mut encoder, &self.viewport)
+            }
+            CurrentScene::Image(image) => {
+                // image.draw(ctx, &mut render_pass, bounds, scale_factor);
+                image.current_render_output(ctx, &mut encoder, &self.viewport)
             }
         };
 
-        if self
-            .render_target
-            .as_ref()
-            .is_none_or(|target| target.texture().size() != size)
-        {
-            self.render_target = Some(self.passthru_pipeline.create_texture(ctx, size));
-        }
-        let render_target = self.render_target.as_ref().expect("just set above");
-
-        {
-            let mut render_pass = Self::start_render_pass(render_target.view(), encoder);
-            match &mut self.scene {
-                CurrentScene::Scene(scene) => scene.draw(&mut render_pass),
-                CurrentScene::Image(image) => {
-                    image.draw(ctx, &mut render_pass, bounds, scale_factor);
-                }
-            }
-        }
-        self.render_to_viewport(
-            view,
-            encoder,
-            render_target,
-            bounds.to_physical(scale_factor),
-        );
-    }
-
-    fn start_render_pass<'a>(
-        target: &'a wgpu::TextureView,
-        encoder: &'a mut wgpu::CommandEncoder,
-    ) -> wgpu::RenderPass<'a> {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Main Image Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        })
-    }
-
-    fn render_to_viewport<'a>(
-        &self,
-        target: &'a wgpu::TextureView,
-        encoder: &'a mut wgpu::CommandEncoder,
-        render_target: &PassThruTexture,
-        bounds: PhysicalInsets<f32>,
-    ) {
-        let PhysicalInsets {
-            top,
-            left,
-            bottom,
-            right,
-        } = bounds;
-
-        let bounds = iced::Rectangle {
-            x: left,
-            y: top,
-            width: right - left,
-            height: bottom - top,
+        let Some(output) = output else {
+            return;
         };
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("PassThru Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // iced drew the gui already, so load that
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+        // self.render_to_viewport(view, &mut encoder, render_target, bounds);
+        self.viewport.draw(&mut encoder, output, view);
 
-        // limit rendering to the scene bounds
-        pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
-
-        self.passthru_pipeline.draw(&mut pass, render_target);
+        ctx.queue.submit([encoder.finish()]);
     }
 
     fn pick_image_dialog() -> Option<PathBuf> {
@@ -288,8 +205,9 @@ impl CurrentScene {
 
 #[derive(Debug, Clone)]
 pub struct PlaceholderWidget<'a> {
-    bounds: &'a Cell<Option<LogicalInsets<f32>>>,
+    bounds: &'a Cell<Option<PhysicalInsets<u32>>>,
     bg_color: Color,
+    scale_factor: f64,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for PlaceholderWidget<'_>
@@ -327,7 +245,7 @@ where
             bottom: bounds.y + bounds.height,
             right: bounds.x + bounds.width,
         };
-        self.bounds.set(Some(inset));
+        self.bounds.set(Some(inset.to_physical(self.scale_factor)));
 
         // Draw the background
         renderer.fill_quad(

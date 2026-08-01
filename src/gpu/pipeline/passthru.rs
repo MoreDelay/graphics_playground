@@ -84,6 +84,8 @@ impl PassThruPipeline {
     }
 }
 
+/// Contains the handles for a texture used with the [`PassThruPipeline`]
+#[derive(Clone)]
 pub struct PassThruTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,

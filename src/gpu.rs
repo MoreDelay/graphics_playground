@@ -1,6 +1,7 @@
 pub mod bind;
 mod buffer;
 pub mod pipeline;
+pub mod viewport;
 
 use std::path::Path;
 use std::sync::Arc;

@@ -1,11 +1,14 @@
 use iced_wgpu::wgpu;
 use iced_winit::core::Color;
 
+use crate::gpu::pipeline::PassThruTexture;
+use crate::gpu::viewport::Viewport;
 use crate::gpu::{GpuContext, TargetContext};
 
 pub struct RenderWidget {
     pipeline: wgpu::RenderPipeline,
     bg_color: Color,
+    render_output: Option<PassThruTexture>,
 }
 
 impl RenderWidget {
@@ -15,16 +18,60 @@ impl RenderWidget {
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let pipeline = Self::build_pipeline(ctx, target);
         let bg_color = Color::BLACK;
-        Self { pipeline, bg_color }
+        let render_output = None;
+        Self {
+            pipeline,
+            bg_color,
+            render_output,
+        }
     }
 
     pub const fn bg_color(&self) -> Color {
         self.bg_color
     }
 
-    pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, output: &PassThruTexture) {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Main Scene Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output.view(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
         render_pass.set_pipeline(&self.pipeline);
         render_pass.draw(0..3, 0..1);
+    }
+
+    pub fn current_render_output(
+        &mut self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: &Viewport,
+    ) -> Option<&PassThruTexture> {
+        let last_output = self.render_output.take();
+        let expected_size = viewport.extent()?;
+
+        let next_output = if let Some(output) = last_output
+            && output.texture().size() == expected_size
+        {
+            output
+        } else {
+            let output = viewport.create_texture(ctx).expect("must have size");
+            self.render(encoder, &output);
+            output
+        };
+
+        self.render_output = Some(next_output);
+        self.render_output.as_ref()
     }
 
     fn build_pipeline(ctx: &GpuContext, target: &TargetContext) -> wgpu::RenderPipeline {

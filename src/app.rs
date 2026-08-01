@@ -7,10 +7,11 @@ use iced::futures::executor::block_on;
 use iced_graphics::{Shell, Viewport};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Engine, Renderer, wgpu};
-use iced_winit::conversion::{cursor_position, window_event};
+use iced_winit::conversion::window_event;
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::{Clipboard, winit};
+use nalgebra as na;
 use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::EventLoopError;
@@ -20,6 +21,7 @@ use winit::keyboard::{Key, ModifiersState};
 use winit::window::WindowAttributes;
 
 use crate::controls::{Controls, Message};
+use crate::gpu::viewport::{VPPoint, VPVector};
 use crate::gpu::{GpuContext, TargetContext};
 
 pub fn run_app() -> Result<(), EventLoopError> {
@@ -97,7 +99,7 @@ impl winit::application::ApplicationHandler for Runner {
         if !ready.events.is_empty() {
             // We process them
             let mut interface = UserInterface::build(
-                ready.controls.view(),
+                ready.controls.view(scale_factor),
                 ready.viewport.logical_size(),
                 std::mem::take(&mut ready.cache),
                 &mut ready.renderer,
@@ -105,9 +107,15 @@ impl winit::application::ApplicationHandler for Runner {
 
             let mut messages = Vec::new();
 
+            let cursor = ready.cursor.map_or(Cursor::Unavailable, |point| {
+                let point = PhysicalPosition::new(point.x, point.y);
+                let point = point.to_logical(scale_factor);
+                let point = iced::Point::new(point.x, point.y);
+                Cursor::Available(point)
+            });
             let _ = interface.update(
                 &ready.events,
-                ready.cursor,
+                cursor,
                 &mut ready.renderer,
                 &mut ready.clipboard,
                 &mut messages,
@@ -120,7 +128,7 @@ impl winit::application::ApplicationHandler for Runner {
             for message in messages {
                 ready
                     .controls
-                    .update(message, &ready.gpu_ctx, &ready.target_ctx, &ready.cursor);
+                    .update(message, &ready.gpu_ctx, &ready.target_ctx, ready.cursor);
             }
 
             // and request a redraw
@@ -135,7 +143,7 @@ struct Ready {
     target_ctx: TargetContext,
     // state of gui
     controls: Controls,
-    cursor: Cursor,
+    cursor: Option<VPPoint>,
     modifiers: ModifiersState,
     resized: bool,
     // objects used by iced but otherwise unused
@@ -246,7 +254,7 @@ impl Ready {
         // You should change this if you want to render continuously
         event_loop.set_control_flow(ControlFlow::Wait);
 
-        let cursor = Cursor::Unavailable;
+        let cursor = None;
         let modifiers = ModifiersState::default();
         let events = Vec::new();
         let dragging = DraggingState::default();
@@ -297,17 +305,23 @@ impl Ready {
 
         // Draw iced first
         let mut interface = UserInterface::build(
-            self.controls.view(),
+            self.controls.view(scale_factor),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
             &mut self.renderer,
         );
 
+        let cursor = self.cursor.map_or(Cursor::Unavailable, |point| {
+            let point = PhysicalPosition::new(point.x, point.y);
+            let point = point.to_logical(scale_factor);
+            let point = iced::Point::new(point.x, point.y);
+            Cursor::Available(point)
+        });
         let (state, _) = interface.update(
             &[Event::Window(
                 window::Event::RedrawRequested(Instant::now()),
             )],
-            self.cursor,
+            cursor,
             &mut self.renderer,
             &mut self.clipboard,
             &mut Vec::new(),
@@ -332,7 +346,7 @@ impl Ready {
             &mut self.renderer,
             &iced::Theme::Dark,
             &renderer::Style::default(),
-            self.cursor,
+            cursor,
         );
         self.cache = interface.into_cache();
 
@@ -350,18 +364,7 @@ impl Ready {
         );
 
         // Draw the scene with wgpu now.
-        let mut encoder =
-            self.gpu_ctx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Frame Draw Command Encoder"),
-                });
-
-        self.controls
-            .draw_wgpu(&self.gpu_ctx, &view, &mut encoder, scale_factor);
-
-        // Submit the scene
-        self.gpu_ctx.queue.submit([encoder.finish()]);
+        self.controls.draw_wgpu(&self.gpu_ctx, &view);
 
         // Present the frame
         frame.present();
@@ -382,21 +385,23 @@ impl Ready {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let after = cursor_position(position, self.viewport.scale_factor());
-        let before = self.cursor;
-        self.cursor = Cursor::Available(after);
+        #[expect(clippy::cast_possible_truncation)]
+        let after = na::Point2::new(position.x as f32, position.y as f32);
+        let after = VPPoint::wrap(after);
+        let before = self.cursor.replace(after);
 
-        let Cursor::Available(before) = before else {
+        let Some(before) = before else {
             self.dragging = DraggingState::Released;
             return;
         };
 
         if self.dragging == DraggingState::Dragging {
-            let offset = after - before;
+            let offset = *after - *before;
+            let offset = VPVector::wrap(na::Vector2::new(offset.x, offset.y));
             let message = Message::Drag(offset);
 
             self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
+                .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
         }
     }
 
@@ -422,14 +427,14 @@ impl Ready {
         };
         if let Some(message) = message {
             self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
+                .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
         }
     }
 
     fn key_pressed(&mut self, key: SmolStr) {
         let message = Message::KeyPress(key);
         self.controls
-            .update(message, &self.gpu_ctx, &self.target_ctx, &self.cursor);
+            .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
     }
 
     fn modifiers_changed(&mut self, modifiers: Modifiers) {

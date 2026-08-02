@@ -41,8 +41,8 @@ pub fn create_simple_shader_module_desc<'a>(
     }
 }
 
-#[expect(unused, reason = "currently only ever used for debugging")]
-pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
+#[expect(dead_code, reason = "currently only ever used for debugging")]
+pub fn save_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
     assert!(
         matches!(
             texture.format(),
@@ -54,9 +54,7 @@ pub fn store_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_p
     let mip_level = 0;
     let width = texture.width();
     let height = texture.height();
-
     let bytes_per_row = 4 * width;
-    let real_size = height * bytes_per_row;
 
     let padded_bytes_per_row = bytes_per_row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let padded_size = height * padded_bytes_per_row;

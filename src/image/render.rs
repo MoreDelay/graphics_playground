@@ -1,6 +1,7 @@
 use std::range::Range;
 
 use iced::wgpu;
+use tristate::TriStore;
 
 use crate::image::{DrawParameters, ImageLoaded};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
@@ -38,33 +39,33 @@ pub fn nearest(
 ) {
     let output = instruments
         .output
-        .or_set_outdated(|| viewport.create_texture(ctx).expect("should work"));
-    if let InstrumentAvailable::Valid(_) = output {
+        .any_or_set_bad(|| viewport.create_texture(ctx).expect("should work"));
+    if output.good().is_some() {
         return;
     }
 
     let texture_layout = instruments
         .texture_layout
-        .or_replace(|| SimpleTextureLayout::new(ctx, None));
-    let original = instruments.original.or_replace(|| {
+        .good_or_set(|| SimpleTextureLayout::new(ctx, None));
+    let original = instruments.original.good_or_set(|| {
         let texture = image.upload(ctx, None);
         SimpleTexture::new(ctx, texture_layout, texture, None)
     });
 
     let buffer_layout = instruments
         .buffer_layout
-        .or_replace(|| SimpleBufferBindLayout::new(ctx, None));
+        .good_or_set(|| SimpleBufferBindLayout::new(ctx, None));
     let pipeline_layout = instruments
         .simple_pipeline_layout
-        .or_replace(|| SimpleImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
+        .good_or_set(|| SimpleImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
     let pipeline = instruments
         .nearest_pipeline
-        .or_replace(|| RenderNearestPipeline::new(ctx, pipeline_layout, target.config.format));
+        .good_or_set(|| RenderNearestPipeline::new(ctx, pipeline_layout, target.config.format));
 
     let meta = params.raw_metadata();
     let meta_buffer = instruments
         .meta_buffer
-        .or_set(|| {
+        .any_or_set_good(|| {
             let meta_buffer = SimpleBuffer::new(ctx, meta, None);
             SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None)
         })
@@ -102,33 +103,33 @@ pub fn bilinear(
 ) {
     let output = instruments
         .output
-        .or_set_outdated(|| viewport.create_texture(ctx).expect("should work"));
-    if let InstrumentAvailable::Valid(_) = output {
+        .any_or_set_bad(|| viewport.create_texture(ctx).expect("should work"));
+    if output.good().is_some() {
         return;
     }
 
     let texture_layout = instruments
         .texture_layout
-        .or_replace(|| SimpleTextureLayout::new(ctx, None));
-    let original = instruments.original.or_replace(|| {
+        .good_or_set(|| SimpleTextureLayout::new(ctx, None));
+    let original = instruments.original.good_or_set(|| {
         let texture = image.upload(ctx, None);
         SimpleTexture::new(ctx, texture_layout, texture, None)
     });
 
     let buffer_layout = instruments
         .buffer_layout
-        .or_replace(|| SimpleBufferBindLayout::new(ctx, None));
+        .good_or_set(|| SimpleBufferBindLayout::new(ctx, None));
     let pipeline_layout = instruments
         .simple_pipeline_layout
-        .or_replace(|| SimpleImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
+        .good_or_set(|| SimpleImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
     let pipeline = instruments
         .bilinear_pipeline
-        .or_replace(|| RenderBilinearPipeline::new(ctx, pipeline_layout, target.config.format));
+        .good_or_set(|| RenderBilinearPipeline::new(ctx, pipeline_layout, target.config.format));
 
     let meta = params.raw_metadata();
     let meta_buffer = instruments
         .meta_buffer
-        .or_set(|| {
+        .any_or_set_good(|| {
             let meta_buffer = SimpleBuffer::new(ctx, meta, None);
             SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None)
         })
@@ -165,100 +166,101 @@ pub fn lanczos(
     viewport: &Viewport,
     params: &DrawParameters,
 ) {
-    println!("run lanczos");
-
     let output = instruments
         .output
-        .or_set_outdated(|| viewport.create_texture(ctx).expect("should work"));
-    if let InstrumentAvailable::Valid(_) = output {
+        .any_or_set_bad(|| viewport.create_texture(ctx).expect("should work"));
+    if output.good().is_some() {
         return;
     }
 
     let texture_layout = instruments
         .texture_layout
-        .or_replace(|| SimpleTextureLayout::new(ctx, None));
-    let original = instruments.original.or_replace(|| {
+        .good_or_set(|| SimpleTextureLayout::new(ctx, None));
+    let original = instruments.original.good_or_set(|| {
         let texture = image.upload(ctx, None);
         SimpleTexture::new(ctx, texture_layout, texture, None)
     });
     let original_texture = original.texture();
 
-    let (storage_layout, kernel_layout, convolution_pipeline) = {
-        let storage = instruments
-            .storage_layout
-            .or_replace(|| StorageSrcDstLayout::new(ctx, None));
-        let kernel = instruments
-            .kernel_layout
-            .or_replace(|| KernelLayout::new(ctx, None));
-        let convolution = instruments
-            .convolution_layout
-            .or_replace(|| ConvolutionPipelineLayout::new(ctx, storage, kernel, None));
-        let pipeline = instruments
-            .convolution_pipeline
-            .or_replace(|| ConvolutionPipeline::new(ctx, convolution, None));
-        (storage, kernel, pipeline)
-    };
+    // Blur image with gaussian filter
+    let kernel_layout = instruments
+        .kernel_layout
+        .good_or_set(|| KernelLayout::new(ctx, None));
 
-    let copy_machine = instruments
-        .copy_machine
-        .or_replace(|| StorageTextureCopyMachine::new(ctx, original_texture.format()));
-
-    let (storage_data, storage_scratch) = {
-        let storage_data = instruments
-            .storage_data
-            .or_replace(|| SimpleStorageTexture::empty(ctx, original_texture, None));
-        let storage_scratch = instruments
-            .storage_scratch
-            .or_replace(|| SimpleStorageTexture::empty(ctx, original_texture, None));
-        (storage_data, storage_scratch)
-    };
-    storage_data.copy_from_texture(
-        ctx,
-        encoder,
-        copy_machine,
-        original_texture,
-        Range::from(0..1),
-    );
-
-    let kernel_bind = instruments.kernel_bind.or_replace(|| {
-        let kernel = params.raw_blur_kernel();
-        KernelBinding::new(ctx, kernel_layout, &kernel, None)
+    let kernel_bind = instruments.kernel_bind.any_or_try_set_good(|| {
+        params
+            .raw_blur_kernel()
+            .map(|kernel| KernelBinding::new(ctx, kernel_layout, &kernel, None))
     });
-    convolution_pipeline.run(
-        ctx,
-        encoder,
-        storage_layout,
-        storage_data,
-        storage_scratch,
-        kernel_bind,
-        0,
-    );
 
-    let blurred = instruments
-        .blurred
-        .or_replace(|| SimpleTexture::empty(ctx, texture_layout, original_texture, None));
-    storage_data.copy_to_texture(
-        ctx,
-        encoder,
-        copy_machine,
-        blurred.texture(),
-        Range::from(0..1),
-    );
+    let blurred = match kernel_bind {
+        None => original,
+        Some(kernel_bind) => instruments.blurred.good_or_set(|| {
+            let storage_layout = instruments
+                .storage_layout
+                .good_or_set(|| StorageSrcDstLayout::new(ctx, None));
+            let convolution_layout = instruments.convolution_layout.good_or_set(|| {
+                ConvolutionPipelineLayout::new(ctx, storage_layout, kernel_layout, None)
+            });
+            let convolution_pipeline = instruments
+                .convolution_pipeline
+                .good_or_set(|| ConvolutionPipeline::new(ctx, convolution_layout, None));
 
+            let copy_machine = instruments
+                .copy_machine
+                .good_or_set(|| StorageTextureCopyMachine::new(ctx, original_texture.format()));
+
+            let storage_data = instruments
+                .storage_data
+                .good_or_set(|| SimpleStorageTexture::empty(ctx, original_texture, None));
+            let storage_scratch = instruments
+                .storage_scratch
+                .good_or_set(|| SimpleStorageTexture::empty(ctx, original_texture, None));
+            storage_data.copy_from_texture(
+                ctx,
+                encoder,
+                copy_machine,
+                original_texture,
+                Range::from(0..1),
+            );
+
+            convolution_pipeline.run(
+                ctx,
+                encoder,
+                storage_layout,
+                storage_data,
+                storage_scratch,
+                kernel_bind.good().expect("no bad kernel bind ever"),
+                0,
+            );
+
+            let blurred = SimpleTexture::empty(ctx, texture_layout, original_texture, None);
+            storage_data.copy_to_texture(
+                ctx,
+                encoder,
+                copy_machine,
+                blurred.texture(),
+                Range::from(0..1),
+            );
+            blurred
+        }),
+    };
+
+    // Interpolate with Lanczos filter
     let buffer_layout = instruments
         .buffer_layout
-        .or_replace(|| SimpleBufferBindLayout::new(ctx, None));
+        .good_or_set(|| SimpleBufferBindLayout::new(ctx, None));
     let pipeline_layout = instruments
         .lanczos_pipeline_layout
-        .or_replace(|| LanczosImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
+        .good_or_set(|| LanczosImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
     let pipeline = instruments
         .lanczos_pipeline
-        .or_replace(|| RenderLanczosPipeline::new(ctx, pipeline_layout, target.config.format));
+        .good_or_set(|| RenderLanczosPipeline::new(ctx, pipeline_layout, target.config.format));
 
     let meta = params.raw_metadata();
     let meta_buffer = instruments
         .meta_buffer
-        .or_set(|| {
+        .any_or_set_good(|| {
             let meta_buffer = SimpleBuffer::new(ctx, meta, None);
             SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None)
         })
@@ -266,7 +268,7 @@ pub fn lanczos(
     let lanczos = params.raw_lanczos();
     let lanczos_buffer = instruments
         .lanczos_buffer
-        .or_set(|| {
+        .any_or_set_good(|| {
             let lanczos = SimpleBuffer::new(ctx, lanczos, None);
             SimpleBufferBind::new(ctx, lanczos, buffer_layout, None)
         })
@@ -302,371 +304,98 @@ pub enum ImageFilter {
 }
 
 #[derive(Default)]
-pub enum Instrument<T> {
-    #[default]
-    Missing,
-    Available(InstrumentAvailable<T>),
-}
-
-impl<T> Instrument<T> {
-    pub fn take(&mut self) -> Self {
-        std::mem::take(self)
-    }
-
-    #[expect(unused)]
-    pub fn unwrap_outdated(self) -> T {
-        match self {
-            Self::Missing => panic!("value is missing"),
-            Self::Available(t) => t.unwrap_outdated(),
-        }
-    }
-
-    #[expect(unused)]
-    pub fn unwrap(self) -> T {
-        match self {
-            Self::Missing => panic!("value is missing"),
-            Self::Available(t) => t.unwrap(),
-        }
-    }
-
-    #[expect(unused)]
-    pub fn unwrap_any(self) -> T {
-        match self {
-            Self::Missing => panic!("value is missing"),
-            Self::Available(t) => t.unwrap_any(),
-        }
-    }
-
-    pub fn or_set<F>(&mut self, f: F) -> &mut InstrumentAvailable<T>
-    where
-        F: FnOnce() -> T,
-    {
-        let f = || InstrumentAvailable::Valid(f());
-        self.or_use(f)
-    }
-
-    pub fn or_set_outdated<F>(&mut self, f: F) -> &mut InstrumentAvailable<T>
-    where
-        F: FnOnce() -> T,
-    {
-        match self {
-            Self::Missing => {
-                let inner = InstrumentAvailable::OutOfDate(f());
-                *self = Self::Available(inner);
-            }
-            Self::Available(_) => (),
-        }
-        self.get_available_mut().expect("just set above")
-    }
-
-    pub fn or_use<F>(&mut self, f: F) -> &mut InstrumentAvailable<T>
-    where
-        F: FnOnce() -> InstrumentAvailable<T>,
-    {
-        match self {
-            Self::Missing => {
-                *self = Self::Available(f());
-            }
-            Self::Available(_) => (),
-        }
-        self.get_available_mut().expect("just set above")
-    }
-
-    #[expect(unused)]
-    pub fn or_else<F>(&mut self, f: F) -> &mut Self
-    where
-        F: FnOnce() -> Self,
-    {
-        match self {
-            Self::Available(InstrumentAvailable::Valid(_)) => (),
-            Self::Missing | Self::Available(_) => *self = f(),
-        }
-        self
-    }
-
-    #[expect(unused)]
-    pub fn outdated_or_else<F>(&mut self, f: F) -> &mut Self
-    where
-        F: FnOnce() -> Self,
-    {
-        match self {
-            Self::Available(InstrumentAvailable::OutOfDate(_)) => (),
-            Self::Missing | Self::Available(_) => *self = f(),
-        }
-        self
-    }
-
-    #[expect(unused)]
-    pub fn replace(&mut self, t: T) -> &mut T {
-        *self = Self::Available(InstrumentAvailable::Valid(t));
-        self.get_mut().expect("set above")
-    }
-
-    pub fn or_replace<F>(&mut self, f: F) -> &mut T
-    where
-        F: FnOnce() -> T,
-    {
-        match self {
-            Self::Available(InstrumentAvailable::Valid(_)) => (),
-            Self::Missing | Self::Available(_) => {
-                *self = Self::Available(InstrumentAvailable::Valid(f()));
-            }
-        }
-        self.get_mut().expect("just set above")
-    }
-
-    #[expect(clippy::unused_self)]
-    pub const fn keep(&self) {}
-
-    pub fn out_of_date(&mut self) {
-        let next = match self.take() {
-            Self::Missing => Self::Missing,
-            Self::Available(mut t) => {
-                t.out_of_date();
-                Self::Available(t)
-            }
-        };
-        *self = next;
-    }
-
-    pub fn reset(&mut self) {
-        let next = match self.take() {
-            Self::Missing => Self::Missing,
-            Self::Available(_) => Self::Missing,
-        };
-        *self = next;
-    }
-
-    pub fn get(&self) -> Option<&T> {
-        match self {
-            Self::Missing => None,
-            Self::Available(t) => t.get(),
-        }
-    }
-
-    #[expect(unused)]
-    pub fn get_any(&self) -> Option<&T> {
-        match self {
-            Self::Missing => None,
-            Self::Available(t) => Some(t.get_any()),
-        }
-    }
-
-    #[expect(unused)]
-    pub const fn get_available(&self) -> Option<&InstrumentAvailable<T>> {
-        match self {
-            Self::Missing => None,
-            Self::Available(t) => Some(t),
-        }
-    }
-
-    pub fn get_mut(&mut self) -> Option<&mut T> {
-        match self {
-            Self::Missing => None,
-            Self::Available(t) => t.get_mut(),
-        }
-    }
-
-    #[expect(unused)]
-    pub fn get_any_mut(&mut self) -> Option<&mut T> {
-        match self {
-            Self::Missing => None,
-            Self::Available(t) => Some(t.get_any_mut()),
-        }
-    }
-
-    pub const fn get_available_mut(&mut self) -> Option<&mut InstrumentAvailable<T>> {
-        match self {
-            Self::Missing => None,
-            Self::Available(t) => Some(t),
-        }
-    }
-}
-
-pub enum InstrumentAvailable<T> {
-    Transition,
-    OutOfDate(T),
-    Valid(T),
-}
-
-impl<T> InstrumentAvailable<T> {
-    pub fn unwrap_outdated(self) -> T {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(t) => t,
-            Self::Valid(_) => panic!("value is valid"),
-        }
-    }
-
-    pub fn unwrap(self) -> T {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(_) => panic!("value is out of date"),
-            Self::Valid(t) => t,
-        }
-    }
-
-    pub fn unwrap_any(self) -> T {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(t) => t,
-            Self::Valid(t) => t,
-        }
-    }
-
-    pub fn or_update<F>(&mut self, f: F) -> &mut T
-    where
-        F: FnOnce(&mut T),
-    {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(t) => {
-                f(t);
-                let t = self.take().unwrap_outdated();
-                *self = Self::Valid(t);
-            }
-            Self::Valid(_) => (),
-        }
-        self.get_mut().expect("just set to valid")
-    }
-
-    pub const fn take(&mut self) -> Self {
-        std::mem::replace(self, Self::Transition)
-    }
-
-    pub fn out_of_date(&mut self) {
-        *self = match self.take() {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(t) => Self::OutOfDate(t),
-            Self::Valid(t) => Self::OutOfDate(t),
-        };
-    }
-
-    pub fn get(&self) -> Option<&T> {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(_) => None,
-            Self::Valid(t) => Some(t),
-        }
-    }
-
-    pub fn get_any(&self) -> &T {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(t) => t,
-            Self::Valid(t) => t,
-        }
-    }
-
-    pub fn get_mut(&mut self) -> Option<&mut T> {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(_) => None,
-            Self::Valid(t) => Some(t),
-        }
-    }
-
-    pub fn get_any_mut(&mut self) -> &mut T {
-        match self {
-            Self::Transition => unreachable!(),
-            Self::OutOfDate(t) => t,
-            Self::Valid(t) => t,
-        }
-    }
-}
-
-#[derive(Default)]
 pub struct ImageInstruments {
-    output: Instrument<PassThruTexture>,
-    original: Instrument<SimpleTexture>,
-    params: Instrument<DrawParameters>,
+    output: TriStore<PassThruTexture>,
+    original: TriStore<SimpleTexture>,
+    params: TriStore<DrawParameters>,
 
-    storage_layout: Instrument<StorageSrcDstLayout>,
-    kernel_layout: Instrument<KernelLayout>,
-    convolution_layout: Instrument<ConvolutionPipelineLayout>,
-    convolution_pipeline: Instrument<ConvolutionPipeline>,
+    storage_layout: TriStore<StorageSrcDstLayout>,
+    kernel_layout: TriStore<KernelLayout>,
+    convolution_layout: TriStore<ConvolutionPipelineLayout>,
+    convolution_pipeline: TriStore<ConvolutionPipeline>,
 
-    copy_machine: Instrument<StorageTextureCopyMachine>,
-    storage_data: Instrument<SimpleStorageTexture>,
-    storage_scratch: Instrument<SimpleStorageTexture>,
-    kernel_bind: Instrument<KernelBinding>,
-    blurred: Instrument<SimpleTexture>,
+    copy_machine: TriStore<StorageTextureCopyMachine>,
+    storage_data: TriStore<SimpleStorageTexture>,
+    storage_scratch: TriStore<SimpleStorageTexture>,
+    kernel_bind: TriStore<KernelBinding>,
+    blurred: TriStore<SimpleTexture>,
 
-    texture_layout: Instrument<SimpleTextureLayout>,
-    buffer_layout: Instrument<SimpleBufferBindLayout>,
+    texture_layout: TriStore<SimpleTextureLayout>,
+    buffer_layout: TriStore<SimpleBufferBindLayout>,
 
-    simple_pipeline_layout: Instrument<SimpleImageRenderPipelineLayout>,
-    lanczos_pipeline_layout: Instrument<LanczosImageRenderPipelineLayout>,
-    nearest_pipeline: Instrument<RenderNearestPipeline>,
-    bilinear_pipeline: Instrument<RenderBilinearPipeline>,
-    lanczos_pipeline: Instrument<RenderLanczosPipeline>,
+    simple_pipeline_layout: TriStore<SimpleImageRenderPipelineLayout>,
+    lanczos_pipeline_layout: TriStore<LanczosImageRenderPipelineLayout>,
+    nearest_pipeline: TriStore<RenderNearestPipeline>,
+    bilinear_pipeline: TriStore<RenderBilinearPipeline>,
+    lanczos_pipeline: TriStore<RenderLanczosPipeline>,
 
-    meta_buffer: Instrument<SimpleBufferBind<ImageMetadataRaw>>,
-    lanczos_buffer: Instrument<SimpleBufferBind<LanczosInfoRaw>>,
+    meta_buffer: TriStore<SimpleBufferBind<ImageMetadataRaw>>,
+    lanczos_buffer: TriStore<SimpleBufferBind<LanczosInfoRaw>>,
 }
 
 impl ImageInstruments {
-    pub const fn output(&self) -> &Instrument<PassThruTexture> {
+    pub const fn output(&self) -> &TriStore<PassThruTexture> {
         &self.output
     }
 
-    #[expect(unused)]
+    #[expect(dead_code)]
     pub fn take(&mut self) -> Self {
         std::mem::take(self)
     }
 
     pub fn replaced_image(&mut self) {
-        self.original.out_of_date();
-        self.output.out_of_date();
-        self.blurred.out_of_date();
-        self.storage_data.out_of_date();
+        self.original.degrade();
+        self.output.degrade();
+        self.blurred.degrade();
+        self.storage_data.degrade();
     }
 
-    #[expect(unused)]
+    #[expect(dead_code)]
     pub fn resized(&mut self) {
-        self.output.reset();
-        self.storage_data.reset();
-        self.storage_scratch.reset();
-        self.blurred.reset();
+        self.output.discard();
+        self.storage_data.discard();
+        self.storage_scratch.discard();
+        self.blurred.discard();
     }
 
     pub fn zoomed(&mut self) {
-        self.output.out_of_date();
-        self.blurred.out_of_date();
-        self.meta_buffer.out_of_date();
+        self.output.degrade();
+        self.blurred.discard();
+        self.kernel_bind.discard();
+        self.meta_buffer.degrade();
     }
 
     pub fn panned(&mut self) {
-        self.output.out_of_date();
-        self.meta_buffer.out_of_date();
+        self.output.degrade();
+        self.meta_buffer.degrade();
     }
 
     pub fn cycled_filter(&mut self) {
-        self.output.out_of_date();
+        self.output.degrade();
         self.original.keep();
         self.params.keep();
 
-        self.storage_layout.reset();
-        self.kernel_layout.reset();
-        self.convolution_layout.reset();
-        self.convolution_pipeline.reset();
+        self.storage_layout.discard();
+        self.kernel_layout.discard();
+        self.convolution_layout.discard();
+        self.convolution_pipeline.discard();
 
-        self.copy_machine.reset();
-        self.storage_data.reset();
-        self.storage_scratch.reset();
-        self.kernel_bind.reset();
-        self.blurred.reset();
+        self.copy_machine.discard();
+        self.storage_data.discard();
+        self.storage_scratch.discard();
+        self.kernel_bind.discard();
+        self.blurred.discard();
 
-        self.texture_layout.reset();
-        self.buffer_layout.reset();
+        self.texture_layout.discard();
+        self.buffer_layout.discard();
 
-        self.simple_pipeline_layout.reset();
-        self.lanczos_pipeline_layout.reset();
-        self.nearest_pipeline.reset();
-        self.bilinear_pipeline.reset();
-        self.lanczos_pipeline.reset();
+        self.simple_pipeline_layout.discard();
+        self.lanczos_pipeline_layout.discard();
+        self.nearest_pipeline.discard();
+        self.bilinear_pipeline.discard();
+        self.lanczos_pipeline.discard();
 
         self.meta_buffer.keep();
-        self.lanczos_buffer.reset();
+        self.lanczos_buffer.discard();
     }
 }

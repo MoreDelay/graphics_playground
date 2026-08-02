@@ -66,11 +66,17 @@ struct ConvolutionRunner<'a> {
 
 impl ConvolutionRunner<'_> {
     fn run(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
-        self.run_filter_over_x(ctx, pass, mip_level);
-        self.run_filter_over_y(ctx, pass, mip_level);
+        self.run_filter_data_to_scratch(ctx, pass, Axis::Y, mip_level);
+        self.run_filter_scratch_to_data(ctx, pass, Axis::X, mip_level);
     }
 
-    fn run_filter_over_x(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
+    fn run_filter_data_to_scratch(
+        &self,
+        ctx: &GpuContext,
+        pass: &mut wgpu::ComputePass,
+        axis: Axis,
+        mip_level: u32,
+    ) {
         let src_view = self.storage_data.create_view(&wgpu::TextureViewDescriptor {
             base_mip_level: mip_level,
             mip_level_count: Some(1),
@@ -97,7 +103,10 @@ impl ConvolutionRunner<'_> {
                 },
             ],
         });
-        self.kernel_bind.set_axis(ctx, Axis::X);
+        let kernel_bind = match axis {
+            Axis::X => self.kernel_bind.bind_group_x(),
+            Axis::Y => self.kernel_bind.bind_group_y(),
+        };
 
         let dispatch_x = self.storage_data.width() >> mip_level; // divide by 2^mip_level
         let dispatch_y = self.storage_data.height() >> mip_level;
@@ -106,11 +115,17 @@ impl ConvolutionRunner<'_> {
 
         pass.set_pipeline(&self.pipeline.0);
         pass.set_bind_group(0, &texture_bind_group, &[]);
-        pass.set_bind_group(1, self.kernel_bind.bind_group(), &[]);
+        pass.set_bind_group(1, kernel_bind, &[]);
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
-    fn run_filter_over_y(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
+    fn run_filter_scratch_to_data(
+        &self,
+        ctx: &GpuContext,
+        pass: &mut wgpu::ComputePass,
+        axis: Axis,
+        mip_level: u32,
+    ) {
         let src_view = self
             .storage_scratch
             .create_view(&wgpu::TextureViewDescriptor {
@@ -137,7 +152,10 @@ impl ConvolutionRunner<'_> {
                 },
             ],
         });
-        self.kernel_bind.set_axis(ctx, Axis::Y);
+        let kernel_bind = match axis {
+            Axis::X => self.kernel_bind.bind_group_x(),
+            Axis::Y => self.kernel_bind.bind_group_y(),
+        };
 
         let dispatch_x = self.storage_data.width() >> mip_level; // divide by 2^mip_level
         let dispatch_y = self.storage_data.height() >> mip_level;
@@ -146,7 +164,7 @@ impl ConvolutionRunner<'_> {
 
         pass.set_pipeline(&self.pipeline.0);
         pass.set_bind_group(0, &texture_bind_group, &[]);
-        pass.set_bind_group(1, self.kernel_bind.bind_group(), &[]);
+        pass.set_bind_group(1, kernel_bind, &[]);
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 }
@@ -273,10 +291,15 @@ pub enum Axis {
 }
 
 pub struct KernelBinding {
-    bind_group: wgpu::BindGroup,
+    bind_group_x: wgpu::BindGroup,
+    bind_group_y: wgpu::BindGroup,
     #[expect(unused)]
     storage_texture: wgpu::Texture,
-    buffer: SimpleBuffer<KernelInfoRaw>,
+    #[expect(unused)]
+    buffer_x: SimpleBuffer<KernelInfoRaw>,
+    #[expect(unused)]
+    buffer_y: SimpleBuffer<KernelInfoRaw>,
+    #[expect(unused)]
     kernel_size: u32,
 }
 
@@ -296,8 +319,13 @@ impl KernelBinding {
             axis: 0,
             offset: kernel_size / 2,
         };
-        let buffer = SimpleBuffer::new(ctx, data, Some("KernelInfo Buffer"));
-        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let buffer_x = SimpleBuffer::new(ctx, data, Some("KernelInfo Buffer X"));
+        let data = KernelInfoRaw {
+            axis: 1,
+            offset: kernel_size / 2,
+        };
+        let buffer_y = SimpleBuffer::new(ctx, data, Some("KernelInfo Buffer Y"));
+        let bind_group_x = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label,
             layout,
             entries: &[
@@ -307,29 +335,41 @@ impl KernelBinding {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buffer.resource(),
+                    resource: buffer_x.resource(),
+                },
+            ],
+        });
+        let bind_group_y = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label,
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer_y.resource(),
                 },
             ],
         });
 
         Self {
-            bind_group,
+            bind_group_x,
+            bind_group_y,
             storage_texture,
-            buffer,
+            buffer_x,
+            buffer_y,
             kernel_size,
         }
     }
 
-    fn set_axis(&self, ctx: &GpuContext, axis: Axis) {
-        let data = KernelInfoRaw {
-            axis: axis as u32,
-            offset: self.kernel_size / 2,
-        };
-        self.buffer.update(ctx, data);
+    const fn bind_group_x(&self) -> &wgpu::BindGroup {
+        &self.bind_group_x
     }
 
-    const fn bind_group(&self) -> &wgpu::BindGroup {
-        &self.bind_group
+    const fn bind_group_y(&self) -> &wgpu::BindGroup {
+        &self.bind_group_y
     }
 
     fn create_kernel_texture(ctx: &GpuContext, kernel: &[f32]) -> wgpu::Texture {
@@ -386,7 +426,7 @@ impl std::ops::Deref for KernelBinding {
     type Target = wgpu::BindGroup;
 
     fn deref(&self) -> &Self::Target {
-        &self.bind_group
+        &self.bind_group_x
     }
 }
 

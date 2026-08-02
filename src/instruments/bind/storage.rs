@@ -52,6 +52,11 @@ impl SimpleStorageTexture {
             machine.to_storage(ctx, encoder, src, &self.0, mip_level);
         }
     }
+
+    #[expect(dead_code)]
+    pub const fn texture(&self) -> &wgpu::Texture {
+        &self.0
+    }
 }
 
 impl std::ops::Deref for SimpleStorageTexture {

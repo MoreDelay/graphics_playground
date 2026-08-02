@@ -17,146 +17,6 @@ use crate::instruments::viewport::{VPPoint, VPVector, Viewport};
 use crate::instruments::{GpuContext, TargetContext};
 
 pub struct ImageWidget {
-    data: WidgetState,
-}
-
-impl ImageWidget {
-    pub fn new() -> Self {
-        let data = WidgetState::new();
-        Self { data }
-    }
-
-    pub fn current_render_output(
-        &mut self,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-    ) -> Option<&PassThruTexture> {
-        self.data.render(ctx, target, encoder, viewport)
-    }
-
-    pub fn update(&mut self, message: ImageMessage) {
-        self.data.update(message);
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ImageMessage {
-    SetImage { image: ImageLoaded },
-    Pan { offset: VPVector },
-    SetZoom { cursor: Option<VPPoint>, zoom: f32 },
-    ZoomIn { cursor: Option<VPPoint> },
-    ZoomOut { cursor: Option<VPPoint> },
-    ResetPosition,
-    CycleFilters,
-}
-
-impl ImageMessage {
-    pub fn from_key(key: &SmolStr, cursor: Option<VPPoint>) -> Option<Self> {
-        match key.as_str() {
-            "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
-            "2" => Some(Self::SetZoom { cursor, zoom: 2. }),
-            "9" => Some(Self::SetZoom { cursor, zoom: 0.5 }),
-            "s" => Some(Self::ResetPosition),
-            "f" => Some(Self::CycleFilters),
-            "-" => Some(Self::ZoomOut { cursor }),
-            "+" => Some(Self::ZoomIn { cursor }),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageLoaded {
-    image: image::RgbaImage,
-    format: wgpu::TextureFormat,
-}
-
-impl ImageLoaded {
-    pub const FORMAT_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-
-    pub fn load(path: &Path) -> Result<Self, image::ImageError> {
-        Self::load_as(path, Self::FORMAT_SRGB)
-    }
-
-    pub fn load_as(path: &Path, format: wgpu::TextureFormat) -> Result<Self, image::ImageError> {
-        let image = image::ImageReader::open(path)?
-            .with_guessed_format()?
-            .decode()?;
-        let image = image.into();
-        Ok(Self { image, format })
-    }
-
-    pub fn size(&self) -> PhysicalSize<u32> {
-        PhysicalSize {
-            width: self.image.width(),
-            height: self.image.height(),
-        }
-    }
-
-    pub fn upload(&self, ctx: &GpuContext, label: Option<&str>) -> wgpu::Texture {
-        let size = wgpu::Extent3d {
-            width: self.image.width(),
-            height: self.image.height(),
-            depth_or_array_layers: 1,
-        };
-
-        let mip_level_count = size.width.min(size.height).ilog2() + 1;
-        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label,
-            size,
-            mip_level_count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            // specified format above supported by default, only additional view formats here
-            view_formats: &[],
-        });
-
-        // assuming only uncompressed formats are used here
-        let texel_bytes = self
-            .format
-            .block_copy_size(None)
-            .expect("assuming no complex texture format is used");
-
-        // load image (on CPU) into texture (on GPU) by issuing command over queue
-        ctx.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &self.image,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(texel_bytes * size.width),
-                rows_per_image: Some(size.height),
-            },
-            size,
-        );
-
-        let mipmapper = MipMapper::new(ctx);
-        mipmapper.compute_mipmaps(ctx, &texture);
-
-        texture
-    }
-}
-
-impl std::ops::Deref for ImageLoaded {
-    type Target = image::RgbaImage;
-
-    fn deref(&self) -> &Self::Target {
-        &self.image
-    }
-}
-
-struct WidgetState {
     image: Option<ImageLoaded>,
 
     instruments: ImageInstruments,
@@ -165,7 +25,7 @@ struct WidgetState {
     params: DrawParameters,
 }
 
-impl WidgetState {
+impl ImageWidget {
     const SCALE_INCREASE_FACTOR: f32 = 1.2;
     const ZOOM_MAX: f32 = 100.0;
     const ZOOM_MIN: f32 = 0.05;
@@ -185,8 +45,8 @@ impl WidgetState {
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
     ) -> Option<&PassThruTexture> {
-        if self.instruments.output().get().is_some() {
-            return self.instruments.output().get();
+        if self.instruments.output().good().is_some() {
+            return self.instruments.output().good();
         }
 
         let params = self.params;
@@ -197,7 +57,7 @@ impl WidgetState {
             ImageFilter::Lanczos => self.lanczos(ctx, target, encoder, viewport, &params),
         }
 
-        self.instruments.output().get()
+        self.instruments.output().good()
     }
 
     pub fn update(&mut self, message: ImageMessage) {
@@ -381,6 +241,121 @@ impl WidgetState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ImageMessage {
+    SetImage { image: ImageLoaded },
+    Pan { offset: VPVector },
+    SetZoom { cursor: Option<VPPoint>, zoom: f32 },
+    ZoomIn { cursor: Option<VPPoint> },
+    ZoomOut { cursor: Option<VPPoint> },
+    ResetPosition,
+    CycleFilters,
+}
+
+impl ImageMessage {
+    pub fn from_key(key: &SmolStr, cursor: Option<VPPoint>) -> Option<Self> {
+        match key.as_str() {
+            "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
+            "2" => Some(Self::SetZoom { cursor, zoom: 2. }),
+            "9" => Some(Self::SetZoom { cursor, zoom: 0.5 }),
+            "s" => Some(Self::ResetPosition),
+            "f" => Some(Self::CycleFilters),
+            "-" => Some(Self::ZoomOut { cursor }),
+            "+" => Some(Self::ZoomIn { cursor }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageLoaded {
+    image: image::RgbaImage,
+    format: wgpu::TextureFormat,
+}
+
+impl ImageLoaded {
+    pub const FORMAT_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+    pub fn load(path: &Path) -> Result<Self, image::ImageError> {
+        Self::load_as(path, Self::FORMAT_SRGB)
+    }
+
+    pub fn load_as(path: &Path, format: wgpu::TextureFormat) -> Result<Self, image::ImageError> {
+        let image = image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .decode()?;
+        let image = image.into();
+        Ok(Self { image, format })
+    }
+
+    pub fn size(&self) -> PhysicalSize<u32> {
+        PhysicalSize {
+            width: self.image.width(),
+            height: self.image.height(),
+        }
+    }
+
+    pub fn upload(&self, ctx: &GpuContext, label: Option<&str>) -> wgpu::Texture {
+        let size = wgpu::Extent3d {
+            width: self.image.width(),
+            height: self.image.height(),
+            depth_or_array_layers: 1,
+        };
+
+        let mip_level_count = size.width.min(size.height).ilog2() + 1;
+        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label,
+            size,
+            mip_level_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            // specified format above supported by default, only additional view formats here
+            view_formats: &[],
+        });
+
+        // assuming only uncompressed formats are used here
+        let texel_bytes = self
+            .format
+            .block_copy_size(None)
+            .expect("assuming no complex texture format is used");
+
+        // load image (on CPU) into texture (on GPU) by issuing command over queue
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &self.image,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(texel_bytes * size.width),
+                rows_per_image: Some(size.height),
+            },
+            size,
+        );
+
+        let mipmapper = MipMapper::new(ctx);
+        mipmapper.compute_mipmaps(ctx, &texture);
+
+        texture
+    }
+}
+
+impl std::ops::Deref for ImageLoaded {
+    type Target = image::RgbaImage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.image
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct DrawParameters {
     /// Widget size as determined by iced layout.
@@ -409,10 +384,18 @@ impl DrawParameters {
         LanczosInfoRaw { filter_size: 2. }
     }
 
-    fn raw_blur_kernel(&self) -> Vec<f32> {
-        let sigma = self.zoom; // TODO: how to derive sigma from zoom?
-        let kernel = GaussFilter::new(sigma).expect("valid sigma");
-        kernel.blur_kernel()
+    fn raw_blur_kernel(&self) -> Option<Vec<f32>> {
+        // This factor is a trade-off between sharpness (lower) and anti-aliasing (higher). 0.3
+        // looks the best from testing around.
+        const FACTOR: f32 = 0.3;
+
+        if self.zoom >= 1. {
+            return None;
+        }
+
+        let sigma = FACTOR / self.zoom;
+        let kernel = GaussFilter::new(sigma)?;
+        Some(kernel.blur_kernel())
     }
 }
 

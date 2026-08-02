@@ -161,9 +161,7 @@ impl Controls {
             CurrentScene::Scene(scene) => {
                 scene.current_render_output(ctx, &mut encoder, &self.viewport)
             }
-            CurrentScene::Image(image) => {
-                image.current_render_output(ctx, target, &mut encoder, &self.viewport)
-            }
+            CurrentScene::Image(image) => image.render(ctx, target, &mut encoder, &self.viewport),
         };
 
         let Some(output) = output else {

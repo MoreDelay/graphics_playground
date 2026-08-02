@@ -1,5 +1,6 @@
 struct ImageInfo {
-    new_size: vec2<u32>,
+    start: vec2<f32>,
+    zoom: f32,
 }
 
 struct LanczosInfo {
@@ -9,14 +10,15 @@ struct LanczosInfo {
 
 @group(0)
 @binding(0)
-var<uniform> lanczos_info: LanczosInfo;
-@group(0)
-@binding(1)
-var<uniform> image_info: ImageInfo;
+var src: texture_2d<f32>;
 
 @group(1)
 @binding(0)
-var src: texture_2d<f32>;
+var<uniform> image_info: ImageInfo;
+
+@group(2)
+@binding(0)
+var<uniform> lanczos_info: LanczosInfo;
 
 const PI = radians(180.0);
 
@@ -36,36 +38,44 @@ fn lanczos_weight(x: f32, a: f32) -> f32 {
 
 @fragment
 fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
-    let old_max = vec2<f32>(textureDimensions(src) - vec2(1, 1));
-    let new_max = vec2<f32>(image_info.new_size - vec2(1, 1));
+    let image_max = textureDimensions(src) - vec2(1, 1);
 
-    // our image samples will be placed at integer values
-    let pos_f = (pos_new.xy - vec2(0.5, 0.5)) * (old_max / new_max);
+    let viewport_pos = pos_new.xy;
+    let pos_f = (viewport_pos - image_info.start) / image_info.zoom;
     let pos_u = vec2<u32>(pos_f);
 
     let a_f = lanczos_info.filter_size;
     let a_u = u32(a_f);
-    let n_samples = a_u * 2;
+    let n_samples = a_u * 2; // `a_u` samples left and right from `pos_f`
 
     var value: vec4<f32> = vec4(0., 0., 0., 0.);
     var weights: f32 = 0.;
 
     for (var i: u32 = 0; i < n_samples; i++) {
-        let sample_x = pos_u.x - a_u + 1 + i;
+        var sample_x: u32 = 0;
+        if (pos_u.x + 1 + i > a_u) {
+            sample_x = pos_u.x - a_u + 1 + i;
+        }
+        sample_x = min(sample_x, image_max.x);
+        // let sample_x = pos_u.x - a_u + 1 + i;
 
         let x = pos_f.x - f32(sample_x);
         let weight_x = lanczos_weight(x, a_f);
 
         for (var j: u32 = 0; j < n_samples; j++) {
-            let sample_y = pos_u.y - a_u + 1 + j;
+            var sample_y: u32 = 0;
+            if (pos_u.y + 1 + j > a_u) {
+                sample_y = pos_u.y - a_u + 1 + j;
+            }
+            sample_y = min(sample_y, image_max.y);
+            // let sample_y = pos_u.y - a_u + 1 + j;
 
             let y = pos_f.y - f32(sample_y);
             let weight_y = lanczos_weight(y, a_f);
+            let weight = weight_x * weight_y;
 
             let sample_pos = vec2(sample_x, sample_y);
             let sample = textureLoad(src, sample_pos, 0);
-
-            let weight = weight_x * weight_y;
 
             value += weight * sample;
             weights += weight;
@@ -74,5 +84,3 @@ fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
 
     return value / weights;
 }
-
-

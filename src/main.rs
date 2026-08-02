@@ -2,8 +2,8 @@ use iced_winit::winit::error::EventLoopError;
 
 mod app;
 mod controls;
-mod gpu;
 mod image;
+mod instruments;
 mod scene;
 
 pub fn main() -> Result<(), EventLoopError> {

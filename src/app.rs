@@ -21,8 +21,8 @@ use winit::keyboard::{Key, ModifiersState};
 use winit::window::WindowAttributes;
 
 use crate::controls::{Controls, Message};
-use crate::gpu::viewport::{VPPoint, VPVector};
-use crate::gpu::{GpuContext, TargetContext};
+use crate::instruments::viewport::{VPPoint, VPVector};
+use crate::instruments::{GpuContext, TargetContext};
 
 pub fn run_app() -> Result<(), EventLoopError> {
     // Initialize winit
@@ -364,7 +364,8 @@ impl Ready {
         );
 
         // Draw the scene with wgpu now.
-        self.controls.draw_wgpu(&self.gpu_ctx, &view);
+        self.controls
+            .draw_wgpu(&self.gpu_ctx, &self.target_ctx, &view);
 
         // Present the frame
         frame.present();

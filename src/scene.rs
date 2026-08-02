@@ -1,9 +1,9 @@
 use iced_wgpu::wgpu;
 use iced_winit::core::Color;
 
-use crate::gpu::pipeline::PassThruTexture;
-use crate::gpu::viewport::Viewport;
-use crate::gpu::{GpuContext, TargetContext};
+use crate::instruments::pipeline::passthru::PassThruTexture;
+use crate::instruments::viewport::Viewport;
+use crate::instruments::{GpuContext, TargetContext};
 
 pub struct RenderWidget {
     pipeline: wgpu::RenderPipeline,
@@ -75,12 +75,12 @@ impl RenderWidget {
     }
 
     fn build_pipeline(ctx: &GpuContext, target: &TargetContext) -> wgpu::RenderPipeline {
-        let vs_module = crate::gpu::create_simple_shader_module_desc(
+        let vs_module = crate::instruments::create_simple_shader_module_desc(
             Some("Triangle Vertex Shader"),
             Self::SHADER_VERTEX,
         );
         let vs_module = ctx.device.create_shader_module(vs_module);
-        let fs_module = crate::gpu::create_simple_shader_module_desc(
+        let fs_module = crate::instruments::create_simple_shader_module_desc(
             Some("Triangle Fragment Shader"),
             Self::SHADER_FRAGMENT,
         );

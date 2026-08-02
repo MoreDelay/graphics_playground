@@ -2,8 +2,8 @@ use iced::wgpu;
 use iced_winit::winit::dpi::{PhysicalInsets, PhysicalSize};
 use nalgebra as na;
 
-use crate::gpu::GpuContext;
-use crate::gpu::pipeline::{PassThruPipeline, PassThruTexture};
+use crate::instruments::GpuContext;
+use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 
 pub struct Viewport {
     pipeline: PassThruPipeline,

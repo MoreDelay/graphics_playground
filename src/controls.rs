@@ -8,9 +8,9 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
-use crate::gpu::viewport::{VPPoint, VPVector, Viewport};
-use crate::gpu::{GpuContext, TargetContext};
 use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
+use crate::instruments::viewport::{VPPoint, VPVector, Viewport};
+use crate::instruments::{GpuContext, TargetContext};
 use crate::scene::RenderWidget;
 
 #[derive(Debug, Clone)]
@@ -91,11 +91,11 @@ impl Controls {
     ) {
         match (&mut self.scene, message) {
             (CurrentScene::Scene(_), Message::SwitchScene) => {
-                self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
+                self.scene = CurrentScene::image(self.image.as_deref());
             }
             (CurrentScene::Scene(_), Message::SelectFile) => {
                 self.image = Self::pick_image_dialog();
-                self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
+                self.scene = CurrentScene::image(self.image.as_deref());
             }
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
@@ -107,7 +107,7 @@ impl Controls {
             }
             (CurrentScene::Image(_), Message::SelectFile) => {
                 self.image = Self::pick_image_dialog();
-                self.scene = CurrentScene::image(self.image.as_deref(), ctx, target);
+                self.scene = CurrentScene::image(self.image.as_deref());
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
                 let message = ImageMessage::ZoomIn { cursor };
@@ -138,7 +138,12 @@ impl Controls {
     }
 
     /// Must be called after [`Controls::view`] to know the viewport bounds.
-    pub fn draw_wgpu(&mut self, ctx: &GpuContext, view: &wgpu::TextureView) {
+    pub fn draw_wgpu(
+        &mut self,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        view: &wgpu::TextureView,
+    ) {
         let Some(bounds) = self.scene_bounds.take() else {
             eprintln!("TRIED TO DRAW WITH NO SCENE BOUNDS!");
             return;
@@ -157,8 +162,7 @@ impl Controls {
                 scene.current_render_output(ctx, &mut encoder, &self.viewport)
             }
             CurrentScene::Image(image) => {
-                // image.draw(ctx, &mut render_pass, bounds, scale_factor);
-                image.current_render_output(ctx, &mut encoder, &self.viewport)
+                image.current_render_output(ctx, target, &mut encoder, &self.viewport)
             }
         };
 
@@ -191,11 +195,15 @@ impl CurrentScene {
         Self::Scene(scene)
     }
 
-    fn image(path: Option<&Path>, ctx: &GpuContext, target: &TargetContext) -> Self {
+    fn image(path: Option<&Path>) -> Self {
+        println!("image scene");
         let mut widget = ImageWidget::new();
         if let Some(path) = path {
             match ImageLoaded::load(path) {
-                Ok(image) => widget.set_image(ctx, target, image),
+                Ok(image) => {
+                    let msg = ImageMessage::SetImage { image };
+                    widget.update(msg);
+                }
                 Err(err) => eprintln!("could not load image: {err}"),
             }
         }

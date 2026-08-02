@@ -1,6 +1,6 @@
 use iced::wgpu;
 
-use crate::gpu::GpuContext;
+use crate::instruments::GpuContext;
 
 pub struct PassThruPipeline {
     pipeline: wgpu::RenderPipeline,
@@ -13,13 +13,13 @@ impl PassThruPipeline {
     const SHADER_FRAGMENT_PASSTHRU: &str = "package::passthru";
 
     pub fn new(ctx: &GpuContext, output_format: wgpu::TextureFormat) -> Self {
-        let vs_module = crate::gpu::create_simple_shader_module_desc(
+        let vs_module = crate::instruments::create_simple_shader_module_desc(
             Some("Quad Shader"),
             Self::SHADER_VERTEX_QUAD,
         );
         let vs_module = ctx.device.create_shader_module(vs_module);
 
-        let fs_module = crate::gpu::create_simple_shader_module_desc(
+        let fs_module = crate::instruments::create_simple_shader_module_desc(
             Some("PassThru Fragment Shader"),
             Self::SHADER_FRAGMENT_PASSTHRU,
         );

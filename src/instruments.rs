@@ -1,5 +1,5 @@
 pub mod bind;
-mod buffer;
+pub mod buffer;
 pub mod pipeline;
 pub mod viewport;
 
@@ -11,11 +11,6 @@ use iced_winit::winit;
 use image::{ImageBuffer, Rgba};
 use wesl::Wesl;
 use winit::window::Window;
-
-#[rustfmt::skip]
-#[expect(unused)]
-pub use buffer::BufferRaw;
-pub use buffer::SimpleBuffer;
 
 pub const SHADER_ROOT: &str = "src/shader";
 

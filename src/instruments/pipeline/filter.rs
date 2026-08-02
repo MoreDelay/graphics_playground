@@ -29,6 +29,7 @@ impl ConvolutionPipeline {
         Self(pipeline)
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn run(
         &self,
         ctx: &GpuContext,
@@ -63,7 +64,7 @@ struct ConvolutionRunner<'a> {
     kernel_bind: &'a KernelBinding,
 }
 
-impl<'a> ConvolutionRunner<'a> {
+impl ConvolutionRunner<'_> {
     fn run(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
         self.run_filter_over_x(ctx, pass, mip_level);
         self.run_filter_over_y(ctx, pass, mip_level);
@@ -84,7 +85,7 @@ impl<'a> ConvolutionRunner<'a> {
             });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MipMapper Filter-1d Bind Group"),
-            layout: &self.storage_layout,
+            layout: self.storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -124,7 +125,7 @@ impl<'a> ConvolutionRunner<'a> {
         });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MipMapper Filter-1d Bind Group"),
-            layout: &self.storage_layout,
+            layout: self.storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -386,49 +387,6 @@ impl std::ops::Deref for KernelBinding {
 
     fn deref(&self) -> &Self::Target {
         &self.bind_group
-    }
-}
-
-struct KernelBindGroupLayout(wgpu::BindGroupLayout);
-
-impl KernelBindGroupLayout {
-    pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
-        let layout = ctx
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label,
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: wgpu::TextureFormat::R32Float,
-                            view_dimension: wgpu::TextureViewDimension::D1,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        Self(layout)
-    }
-}
-
-impl std::ops::Deref for KernelBindGroupLayout {
-    type Target = wgpu::BindGroupLayout;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

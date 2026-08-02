@@ -66,7 +66,7 @@ impl<R: BufferRaw> SimpleBufferBind<R> {
         Self { buffer, bind }
     }
 
-    pub fn buffer(&self) -> &SimpleBuffer<R> {
+    pub const fn buffer(&self) -> &SimpleBuffer<R> {
         &self.buffer
     }
 }

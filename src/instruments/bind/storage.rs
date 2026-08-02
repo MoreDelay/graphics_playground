@@ -92,7 +92,7 @@ impl StorageTextureCopyMachine {
         dst: &wgpu::Texture,
         mip_level: u32,
     ) {
-        assert_eq!(src.size(), dst.size());
+        assert_eq!(src.size(), dst.size(), "copy only when sizes equal");
         self.run_internal(ctx, encoder, src, dst, mip_level, &self.texture_to_storage);
     }
 
@@ -104,7 +104,7 @@ impl StorageTextureCopyMachine {
         dst: &wgpu::Texture,
         mip_level: u32,
     ) {
-        assert_eq!(src.size(), dst.size());
+        assert_eq!(src.size(), dst.size(), "copy only when sizes equal");
         self.run_internal(ctx, encoder, src, dst, mip_level, &self.storage_to_texture);
     }
 

@@ -4,6 +4,7 @@ use crate::instruments::GpuContext;
 
 pub struct SimpleTexture {
     texture: wgpu::Texture,
+    #[expect(unused)]
     view: wgpu::TextureView,
     bind: wgpu::BindGroup,
 }

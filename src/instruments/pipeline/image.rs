@@ -255,7 +255,7 @@ impl SimpleImageRenderPipelineLayout {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Image Pipeline Layout"),
                 push_constant_ranges: &[],
-                bind_group_layouts: &[&texture_layout, &buffer_layout],
+                bind_group_layouts: &[texture_layout, buffer_layout],
             });
         Self(layout)
     }
@@ -282,7 +282,7 @@ impl LanczosImageRenderPipelineLayout {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Lanczos Image Pipeline Layout"),
                 push_constant_ranges: &[],
-                bind_group_layouts: &[&texture_layout, &buffer_layout, &buffer_layout],
+                bind_group_layouts: &[texture_layout, buffer_layout, buffer_layout],
             });
         Self(layout)
     }

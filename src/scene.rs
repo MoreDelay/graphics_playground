@@ -30,7 +30,7 @@ impl RenderWidget {
         self.bg_color
     }
 
-    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, output: &PassThruTexture) {
+    pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, output: &PassThruTexture) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Main Scene Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -51,7 +51,7 @@ impl RenderWidget {
         render_pass.draw(0..3, 0..1);
     }
 
-    pub fn current_render_output(
+    pub fn render(
         &mut self,
         ctx: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
@@ -66,7 +66,7 @@ impl RenderWidget {
             output
         } else {
             let output = viewport.create_texture(ctx).expect("must have size");
-            self.render(encoder, &output);
+            self.draw(encoder, &output);
             output
         };
 

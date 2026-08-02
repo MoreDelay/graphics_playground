@@ -301,11 +301,11 @@ impl<T> Quality<T> {
         self.inner.or_update(f)
     }
 
-    fn degrade(&mut self) {
+    pub fn degrade(&mut self) {
         self.inner.degrade()
     }
 
-    fn state(&self) -> TriState {
+    pub fn state(&self) -> TriState {
         self.inner.state()
     }
 }

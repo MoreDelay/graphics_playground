@@ -149,7 +149,16 @@ impl Controls {
             return;
         };
 
-        self.viewport.resize(bounds);
+        let new_size = self.viewport.resize(bounds);
+        if new_size {
+            match &mut self.scene {
+                CurrentScene::Scene(_) => (),
+                CurrentScene::Image(image) => {
+                    let msg = ImageMessage::ResizedViewport;
+                    image.update(msg);
+                }
+            }
+        }
 
         let mut encoder = ctx
             .device
@@ -158,9 +167,7 @@ impl Controls {
             });
 
         let output = match &mut self.scene {
-            CurrentScene::Scene(scene) => {
-                scene.current_render_output(ctx, &mut encoder, &self.viewport)
-            }
+            CurrentScene::Scene(scene) => scene.render(ctx, &mut encoder, &self.viewport),
             CurrentScene::Image(image) => image.render(ctx, target, &mut encoder, &self.viewport),
         };
 
@@ -194,7 +201,6 @@ impl CurrentScene {
     }
 
     fn image(path: Option<&Path>) -> Self {
-        println!("image scene");
         let mut widget = ImageWidget::new();
         if let Some(path) = path {
             match ImageLoaded::load(path) {

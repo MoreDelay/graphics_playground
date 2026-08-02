@@ -350,7 +350,6 @@ impl ImageInstruments {
         self.storage_data.degrade();
     }
 
-    #[expect(dead_code)]
     pub fn resized(&mut self) {
         self.output.discard();
         self.storage_data.discard();

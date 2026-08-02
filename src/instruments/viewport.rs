@@ -17,7 +17,7 @@ impl Viewport {
         Self { pipeline, bounds }
     }
 
-    pub const fn resize(&mut self, bounds: PhysicalInsets<u32>) {
+    pub fn resize(&mut self, bounds: PhysicalInsets<u32>) -> bool {
         let PhysicalInsets {
             top,
             left,
@@ -27,11 +27,12 @@ impl Viewport {
 
         let width = right - left;
         let height = bottom - top;
-        if width == 0 || height == 0 {
-            self.bounds = None;
+        let last = if width == 0 || height == 0 {
+            self.bounds.take()
         } else {
-            self.bounds = Some(bounds);
-        }
+            self.bounds.replace(bounds)
+        };
+        last != self.bounds
     }
 
     pub fn create_texture(&self, ctx: &GpuContext) -> Option<PassThruTexture> {

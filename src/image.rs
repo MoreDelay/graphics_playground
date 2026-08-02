@@ -63,6 +63,7 @@ impl ImageWidget {
     pub fn update(&mut self, message: ImageMessage) {
         match message {
             ImageMessage::SetImage { image } => self.set_image(image),
+            ImageMessage::ResizedViewport => self.instruments.resized(),
             ImageMessage::Pan { offset } => self.pan(offset),
             ImageMessage::SetZoom { zoom, cursor } => {
                 let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
@@ -151,7 +152,6 @@ impl ImageWidget {
     }
 
     fn set_image(&mut self, image: ImageLoaded) {
-        println!("update image");
         self.instruments.replaced_image();
         self.image = Some(image);
     }
@@ -244,6 +244,7 @@ impl ImageWidget {
 #[derive(Debug, Clone)]
 pub enum ImageMessage {
     SetImage { image: ImageLoaded },
+    ResizedViewport,
     Pan { offset: VPVector },
     SetZoom { cursor: Option<VPPoint>, zoom: f32 },
     ZoomIn { cursor: Option<VPPoint> },

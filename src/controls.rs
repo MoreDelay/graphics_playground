@@ -91,11 +91,11 @@ impl Controls {
     ) {
         match (&mut self.scene, message) {
             (CurrentScene::Scene(_), Message::SwitchScene) => {
-                self.scene = CurrentScene::image(self.image.as_deref());
+                self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
             }
             (CurrentScene::Scene(_), Message::SelectFile) => {
                 self.image = Self::pick_image_dialog();
-                self.scene = CurrentScene::image(self.image.as_deref());
+                self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
             }
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
@@ -107,7 +107,7 @@ impl Controls {
             }
             (CurrentScene::Image(_), Message::SelectFile) => {
                 self.image = Self::pick_image_dialog();
-                self.scene = CurrentScene::image(self.image.as_deref());
+                self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
                 let message = ImageMessage::ZoomIn { cursor };
@@ -151,10 +151,11 @@ impl Controls {
 
         let new_size = self.viewport.resize(bounds);
         if new_size {
+            let size = self.viewport.size();
             match &mut self.scene {
                 CurrentScene::Scene(_) => (),
                 CurrentScene::Image(image) => {
-                    let msg = ImageMessage::ResizedViewport;
+                    let msg = ImageMessage::ResizedViewport { size };
                     image.update(msg);
                 }
             }
@@ -200,8 +201,13 @@ impl CurrentScene {
         Self::Scene(scene)
     }
 
-    fn image(path: Option<&Path>) -> Self {
+    fn image(path: Option<&Path>, viewport: &Viewport) -> Self {
         let mut widget = ImageWidget::new();
+
+        let size = viewport.size();
+        let msg = ImageMessage::ResizedViewport { size };
+        widget.update(msg);
+
         if let Some(path) = path {
             match ImageLoaded::load(path) {
                 Ok(image) => {
@@ -211,6 +217,7 @@ impl CurrentScene {
                 Err(err) => eprintln!("could not load image: {err}"),
             }
         }
+
         Self::Image(widget)
     }
 }

@@ -93,7 +93,6 @@ impl Viewport {
         self.pipeline.draw(&mut pass, rendering);
     }
 
-    #[expect(unused)]
     pub fn size(&self) -> Option<PhysicalSize<u32>> {
         let bounds = self.bounds?;
         Some(PhysicalSize {

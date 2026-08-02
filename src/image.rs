@@ -63,7 +63,7 @@ impl ImageWidget {
     pub fn update(&mut self, message: ImageMessage) {
         match message {
             ImageMessage::SetImage { image } => self.set_image(image),
-            ImageMessage::ResizedViewport => self.instruments.resized(),
+            ImageMessage::ResizedViewport { size } => self.resize_viewport(size),
             ImageMessage::Pan { offset } => self.pan(offset),
             ImageMessage::SetZoom { zoom, cursor } => {
                 let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
@@ -156,6 +156,11 @@ impl ImageWidget {
         self.image = Some(image);
     }
 
+    fn resize_viewport(&mut self, size: Option<PhysicalSize<u32>>) {
+        self.instruments.resized();
+        self.params.viewport = size.unwrap_or_default();
+    }
+
     fn zoom_in(&mut self, fix_point: VPPoint) {
         let zoom = self.params.zoom * Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
@@ -244,7 +249,7 @@ impl ImageWidget {
 #[derive(Debug, Clone)]
 pub enum ImageMessage {
     SetImage { image: ImageLoaded },
-    ResizedViewport,
+    ResizedViewport { size: Option<PhysicalSize<u32>> },
     Pan { offset: VPVector },
     SetZoom { cursor: Option<VPPoint>, zoom: f32 },
     ZoomIn { cursor: Option<VPPoint> },

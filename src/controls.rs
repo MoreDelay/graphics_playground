@@ -9,17 +9,18 @@ use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
 use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
-use crate::instruments::viewport::{VPPoint, VPVector, Viewport};
+use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::scene::RenderWidget;
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    SetScaleFactor(f32),
     SwitchScene,
     SelectFile,
     ScrollUp,
     ScrollDown,
-    Drag(VPVector),
+    Drag(iced::Vector),
     KeyPress(SmolStr),
 }
 
@@ -87,9 +88,18 @@ impl Controls {
         message: Message,
         ctx: &GpuContext,
         target: &TargetContext,
-        cursor: Option<VPPoint>,
+        cursor: iced::mouse::Cursor,
     ) {
+        let cursor = match cursor {
+            iced::mouse::Cursor::Available(point) => Some(point),
+            iced::mouse::Cursor::Levitating(point) => Some(point),
+            iced::mouse::Cursor::Unavailable => None,
+        };
+        let cursor = cursor.map(|cursor| self.viewport.to_vp_point(cursor));
+
         match (&mut self.scene, message) {
+            (_, Message::SetScaleFactor(factor)) => self.viewport.set_scale_factor(factor),
+
             (CurrentScene::Scene(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
             }
@@ -118,6 +128,7 @@ impl Controls {
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Drag(offset)) => {
+                let offset = self.viewport.to_vp_vector(offset);
                 let message = ImageMessage::Pan { offset };
                 widget.update(message);
             }

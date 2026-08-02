@@ -8,13 +8,17 @@ use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 pub struct Viewport {
     pipeline: PassThruPipeline,
     bounds: Option<PhysicalInsets<u32>>,
+    scale_factor: f32,
 }
 
 impl Viewport {
     pub fn new(ctx: &GpuContext, output_format: wgpu::TextureFormat) -> Self {
         let pipeline = PassThruPipeline::new(ctx, output_format);
-        let bounds = None;
-        Self { pipeline, bounds }
+        Self {
+            pipeline,
+            bounds: None,
+            scale_factor: 1.,
+        }
     }
 
     pub fn resize(&mut self, bounds: PhysicalInsets<u32>) -> bool {
@@ -33,6 +37,10 @@ impl Viewport {
             self.bounds.replace(bounds)
         };
         last != self.bounds
+    }
+
+    pub const fn set_scale_factor(&mut self, scale_factor: f32) {
+        self.scale_factor = scale_factor;
     }
 
     pub fn create_texture(&self, ctx: &GpuContext) -> Option<PassThruTexture> {
@@ -103,6 +111,26 @@ impl Viewport {
 
     pub fn extent(&self) -> Option<wgpu::Extent3d> {
         self.bounds.map(bounds_to_extent)
+    }
+
+    pub fn to_vp_vector(&self, vector: iced::Vector) -> VPVector {
+        let iced::Vector { x, y } = vector;
+        let vector = na::Vector2::new(x, y) / self.scale_factor;
+        VPVector::wrap(vector)
+    }
+
+    pub fn to_vp_point(&self, point: iced::Point) -> VPPoint {
+        let iced::Point { x, y } = point;
+        let point = na::Point2::new(x, y) / self.scale_factor;
+        let point = point - *self.offset();
+        VPPoint::wrap(point)
+    }
+
+    fn offset(&self) -> VPVector {
+        let bounds = self.bounds.unwrap_or_default();
+        #[expect(clippy::cast_precision_loss)]
+        let offset = na::Vector2::new(bounds.left as f32, bounds.top as f32);
+        VPVector::wrap(offset)
     }
 }
 

@@ -7,11 +7,10 @@ use iced::futures::executor::block_on;
 use iced_graphics::{Shell, Viewport};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Engine, Renderer, wgpu};
-use iced_winit::conversion::window_event;
+use iced_winit::conversion::{cursor_position, window_event};
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::{Clipboard, winit};
-use nalgebra as na;
 use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::EventLoopError;
@@ -21,7 +20,6 @@ use winit::keyboard::{Key, ModifiersState};
 use winit::window::WindowAttributes;
 
 use crate::controls::{Controls, Message};
-use crate::instruments::viewport::{VPPoint, VPVector};
 use crate::instruments::{GpuContext, TargetContext};
 
 pub fn run_app() -> Result<(), EventLoopError> {
@@ -107,15 +105,9 @@ impl winit::application::ApplicationHandler for Runner {
 
             let mut messages = Vec::new();
 
-            let cursor = ready.cursor.map_or(Cursor::Unavailable, |point| {
-                let point = PhysicalPosition::new(point.x, point.y);
-                let point = point.to_logical(scale_factor);
-                let point = iced::Point::new(point.x, point.y);
-                Cursor::Available(point)
-            });
             let _ = interface.update(
                 &ready.events,
-                cursor,
+                ready.cursor,
                 &mut ready.renderer,
                 &mut ready.clipboard,
                 &mut messages,
@@ -143,7 +135,7 @@ struct Ready {
     target_ctx: TargetContext,
     // state of gui
     controls: Controls,
-    cursor: Option<VPPoint>,
+    cursor: Cursor,
     modifiers: ModifiersState,
     resized: bool,
     // objects used by iced but otherwise unused
@@ -254,7 +246,7 @@ impl Ready {
         // You should change this if you want to render continuously
         event_loop.set_control_flow(ControlFlow::Wait);
 
-        let cursor = None;
+        let cursor = Cursor::Unavailable;
         let modifiers = ModifiersState::default();
         let events = Vec::new();
         let dragging = DraggingState::default();
@@ -311,17 +303,11 @@ impl Ready {
             &mut self.renderer,
         );
 
-        let cursor = self.cursor.map_or(Cursor::Unavailable, |point| {
-            let point = PhysicalPosition::new(point.x, point.y);
-            let point = point.to_logical(scale_factor);
-            let point = iced::Point::new(point.x, point.y);
-            Cursor::Available(point)
-        });
         let (state, _) = interface.update(
             &[Event::Window(
                 window::Event::RedrawRequested(Instant::now()),
             )],
-            cursor,
+            self.cursor,
             &mut self.renderer,
             &mut self.clipboard,
             &mut Vec::new(),
@@ -346,7 +332,7 @@ impl Ready {
             &mut self.renderer,
             &iced::Theme::Dark,
             &renderer::Style::default(),
-            cursor,
+            self.cursor,
         );
         self.cache = interface.into_cache();
 
@@ -380,6 +366,10 @@ impl Ready {
         let scale_factor = self.target_ctx.window.scale_factor() as f32;
         self.viewport = Viewport::with_physical_size(iced::Size::new(width, height), scale_factor);
 
+        let message = Message::SetScaleFactor(scale_factor);
+        self.controls
+            .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
+
         self.target_ctx
             .surface
             .configure(&self.gpu_ctx.device, &self.target_ctx.config);
@@ -387,18 +377,17 @@ impl Ready {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         #[expect(clippy::cast_possible_truncation)]
-        let after = na::Point2::new(position.x as f32, position.y as f32);
-        let after = VPPoint::wrap(after);
-        let before = self.cursor.replace(after);
+        let after = cursor_position(position, self.target_ctx.window.scale_factor() as f32);
+        let cursor = Cursor::Available(after);
+        let before = std::mem::replace(&mut self.cursor, cursor);
 
-        let Some(before) = before else {
+        let Cursor::Available(before) = before else {
             self.dragging = DraggingState::Released;
             return;
         };
 
         if self.dragging == DraggingState::Dragging {
-            let offset = *after - *before;
-            let offset = VPVector::wrap(na::Vector2::new(offset.x, offset.y));
+            let offset = after - before;
             let message = Message::Drag(offset);
 
             self.controls

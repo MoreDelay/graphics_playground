@@ -233,7 +233,7 @@ impl ImageInstruments {
             return;
         }
 
-        let out = SimpleTextureLayout::new(ctx, None);
+        let out = SimpleTextureLayout::new(ctx, Some("Image Texture Layout"));
         self.texture_layout = Use::Active(out);
     }
 
@@ -241,7 +241,7 @@ impl ImageInstruments {
         if self.buffer_layout.checked() {
             return;
         }
-        let out = SimpleBufferBindLayout::new(ctx, None);
+        let out = SimpleBufferBindLayout::new(ctx, Some("Image Buffer Layout"));
         self.buffer_layout = Use::Active(out);
     }
 
@@ -291,8 +291,13 @@ impl ImageInstruments {
                 let buffer_layout = self.buffer_layout.active();
 
                 let meta = params.raw_metadata();
-                let meta_buffer = SimpleBuffer::new(ctx, meta, None);
-                let meta_buffer = SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None);
+                let meta_buffer = SimpleBuffer::new(ctx, meta, Some("Image Metainfo Buffer"));
+                let meta_buffer = SimpleBufferBind::new(
+                    ctx,
+                    meta_buffer,
+                    buffer_layout,
+                    Some("Image Metainfo Binding"),
+                );
                 self.meta_buffer = Use::Active(meta_buffer);
             }
             Use::Recycle(b) | Use::Unused(b) => {
@@ -313,8 +318,13 @@ impl ImageInstruments {
 
         self.create_texture_layout(ctx);
         let texture_layout = self.texture_layout.active();
-        let texture = image.upload(ctx, None);
-        let original = SimpleTexture::new(ctx, texture_layout, texture, None);
+        let texture = image.upload(ctx, Some("Image Original Texture"));
+        let original = SimpleTexture::new(
+            ctx,
+            texture_layout,
+            texture,
+            Some("Image Original Texture Bind"),
+        );
         self.original = Use::Active(original);
     }
 
@@ -323,7 +333,7 @@ impl ImageInstruments {
             return;
         }
 
-        self.kernel_layout = Use::Active(KernelLayout::new(ctx, None));
+        self.kernel_layout = Use::Active(KernelLayout::new(ctx, Some("Image Kernel Layout")));
     }
 
     fn create_kernel_bind(&mut self, ctx: &GpuContext, params: &DrawParameters) {
@@ -335,7 +345,12 @@ impl ImageInstruments {
             Some(kernel) => {
                 self.create_kernel_layout(ctx);
                 let layout = self.kernel_layout.active();
-                Use::Active(KernelBinding::new(ctx, layout, &kernel, None))
+                Use::Active(KernelBinding::new(
+                    ctx,
+                    layout,
+                    &kernel,
+                    Some("Image Kernel Bind"),
+                ))
             }
             None => Use::Invalid,
         };
@@ -346,7 +361,10 @@ impl ImageInstruments {
             return;
         }
 
-        self.storage_layout = Use::Active(StorageSrcDstLayout::new(ctx, None));
+        self.storage_layout = Use::Active(StorageSrcDstLayout::new(
+            ctx,
+            Some("Image Kernel Storage Texture Bind Layout"),
+        ));
     }
 
     fn create_convolution_layout(&mut self, ctx: &GpuContext) {
@@ -359,7 +377,12 @@ impl ImageInstruments {
         let storage = self.storage_layout.active();
         let kernel = self.kernel_layout.active();
 
-        let convolution = ConvolutionPipelineLayout::new(ctx, storage, kernel, None);
+        let convolution = ConvolutionPipelineLayout::new(
+            ctx,
+            storage,
+            kernel,
+            Some("Image Convolution Pipeline Layout"),
+        );
         self.convolution_layout = Use::Active(convolution);
     }
 
@@ -370,7 +393,8 @@ impl ImageInstruments {
         self.create_convolution_layout(ctx);
         let convolution = self.convolution_layout.active();
 
-        let convolution = ConvolutionPipeline::new(ctx, convolution, None);
+        let convolution =
+            ConvolutionPipeline::new(ctx, convolution, Some("Image Convolution Pipeline"));
         self.convolution_pipeline = Use::Active(convolution);
     }
 
@@ -394,7 +418,11 @@ impl ImageInstruments {
         self.create_original(ctx, image);
         let original = self.original.active();
 
-        let storage = SimpleStorageTexture::empty(ctx, original.texture(), None);
+        let storage = SimpleStorageTexture::empty(
+            ctx,
+            original.texture(),
+            Some("Image Data Storage Texture"),
+        );
         self.storage_data = Use::Active(storage);
     }
 
@@ -406,7 +434,11 @@ impl ImageInstruments {
         self.create_original(ctx, image);
         let original = self.original.active();
 
-        let storage = SimpleStorageTexture::empty(ctx, original.texture(), None);
+        let storage = SimpleStorageTexture::empty(
+            ctx,
+            original.texture(),
+            Some("Image Scratch Storage Texture"),
+        );
         self.storage_scratch = Use::Active(storage);
     }
 
@@ -416,8 +448,9 @@ impl ImageInstruments {
                 self.create_buffer_layout(ctx);
                 let layout = self.buffer_layout.active();
                 let buffer = params.raw_lanczos();
-                let buffer = SimpleBuffer::new(ctx, buffer, None);
-                let buffer = SimpleBufferBind::new(ctx, buffer, layout, None);
+                let buffer = SimpleBuffer::new(ctx, buffer, Some("Image Lanczos Buffer"));
+                let buffer =
+                    SimpleBufferBind::new(ctx, buffer, layout, Some("Image Lanczos Buffer Bind"));
                 self.lanczos_buffer = Use::Active(buffer);
             }
             Use::Recycle(b) | Use::Unused(b) => {
@@ -501,7 +534,13 @@ impl ImageInstruments {
                 let texture = self.texture_layout.active();
                 let original = self.original.active();
 
-                SimpleTexture::empty(ctx, texture, original.texture(), None)
+                SimpleTexture::empty(
+                    ctx,
+                    texture,
+                    original.texture(),
+                    Some("Image Blurred Texture"),
+                    Some("Image Blurred Texture Bind"),
+                )
             }
         };
 

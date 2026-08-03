@@ -36,10 +36,11 @@ impl SimpleTexture {
         ctx: &GpuContext,
         layout: &SimpleTextureLayout,
         base: &wgpu::Texture,
-        label: Option<&str>,
+        texture_label: Option<&str>,
+        bind_label: Option<&str>,
     ) -> Self {
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label,
+            label: texture_label,
             size: base.size(),
             mip_level_count: base.mip_level_count(),
             sample_count: base.sample_count(),
@@ -50,7 +51,7 @@ impl SimpleTexture {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label,
+            label: bind_label,
             layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,

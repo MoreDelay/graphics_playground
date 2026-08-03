@@ -38,10 +38,20 @@ fn lanczos_weight(x: f32, a: f32) -> f32 {
 
 @fragment
 fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
-    let image_max = textureDimensions(src) - vec2(1, 1);
+    let image_dims = textureDimensions(src);
 
     let viewport_pos = pos_new.xy;
-    let pos_f = (viewport_pos - image_info.start) / image_info.zoom;
+    let pos_old = (viewport_pos - image_info.start) / image_info.zoom;
+
+    let inside = 0 <= pos_old.x && pos_old.x <= f32(image_dims.x)
+              && 0 <= pos_old.y && pos_old.y <= f32(image_dims.y);
+    if !inside {
+        discard;
+    }
+
+    let image_max = textureDimensions(src) - vec2(1, 1);
+
+    let pos_f = pos_old - vec2(0.5,0.5);
     let pos_u = vec2<u32>(pos_f);
 
     let a_f = lanczos_info.filter_size;
@@ -57,7 +67,6 @@ fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
             sample_x = pos_u.x - a_u + 1 + i;
         }
         sample_x = min(sample_x, image_max.x);
-        // let sample_x = pos_u.x - a_u + 1 + i;
 
         let x = pos_f.x - f32(sample_x);
         let weight_x = lanczos_weight(x, a_f);
@@ -68,7 +77,6 @@ fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
                 sample_y = pos_u.y - a_u + 1 + j;
             }
             sample_y = min(sample_y, image_max.y);
-            // let sample_y = pos_u.y - a_u + 1 + j;
 
             let y = pos_f.y - f32(sample_y);
             let weight_y = lanczos_weight(y, a_f);

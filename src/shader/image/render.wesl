@@ -21,41 +21,52 @@ fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
     return mat2x2(left, right);
 }
 
-// Use integer coords as otherwise some pixels are jumping on large images due to floating
-// point errors.
-fn sample_at(coords: vec2<i32>, level: u32) -> vec4<f32> {
-    let dims = vec2<i32>(textureDimensions(t_image));
-
-    let inside = (0 <= coords.x && coords.x < dims.x)
-              && (0 <= coords.y && coords.y < dims.y);
+fn filter_bilinear(image_pos: vec2<f32>) -> vec4<f32> {
+    let dims = textureDimensions(t_image);
+    let dims_f = vec2<f32>(dims);
+    let inside = 0. <= image_pos.x && image_pos.x <= dims_f.x
+              && 0. <= image_pos.y && image_pos.y <= dims_f.y;
     if !inside { discard; }
 
-    let sample = textureLoad(t_image, coords, level);
-    return sample;
-}
-
-fn filter_bilinear(pos_center: vec2<f32>) -> vec4<f32> {
     let level_f = max(0., floor(log2(1. / image_info.zoom)));
-    let pos = pos_center / exp2(level_f);
     let level = u32(level_f);
 
-    let weights = bilinear_weights(fract(pos));
-    let grid_pos = vec2<i32>(floor(pos));
-    let lerp = weights[0][0] * sample_at(grid_pos + vec2(0, 0), level)
-             + weights[0][1] * sample_at(grid_pos + vec2(0, 1), level)
-             + weights[1][0] * sample_at(grid_pos + vec2(1, 0), level)
-             + weights[1][1] * sample_at(grid_pos + vec2(1, 1), level);
+    let pos_level_f = image_pos / exp2(level_f);
+    let dims_level = dims >> vec2(level, level);
+
+    let shift_lo = pos_level_f - vec2(0.5, 0.5);
+    let shift_hi = shift_lo + vec2(1., 1.);
+    let image_max = vec2<f32>(dims_level - vec2(1, 1));
+
+    let lo = vec2<u32>(clamp(shift_lo, vec2(0., 0.), image_max));
+    let hi = vec2<u32>(clamp(shift_hi, vec2(0., 0.), image_max));
+
+    let lo_lo = vec2(lo.x, lo.y);
+    let lo_hi = vec2(lo.x, hi.y);
+    let hi_lo = vec2(hi.x, lo.y);
+    let hi_hi = vec2(hi.x, hi.y);
+
+    let weights = bilinear_weights(fract(shift_lo));
+    let lerp = weights[0][0] * textureLoad(t_image, lo_lo, level)
+             + weights[0][1] * textureLoad(t_image, lo_hi, level)
+             + weights[1][0] * textureLoad(t_image, hi_lo, level)
+             + weights[1][1] * textureLoad(t_image, hi_hi, level);
     return lerp;
 }
 
-fn filter_nearest(pos: vec2<f32>) -> vec4<f32> {
-    return sample_at(vec2<i32>(floor(pos)), 0);
+fn filter_nearest(image_pos: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<f32>(textureDimensions(t_image));
+
+    let inside = 0 <= image_pos.x && image_pos.x < dims.x
+              && 0 <= image_pos.y && image_pos.y < dims.y;
+    if !inside { discard; }
+
+    let coords = vec2<u32>(floor(image_pos));
+    return textureLoad(t_image, coords, 0);
 }
 
 @fragment
 fn fs_image(@builtin(position) in: vec4<f32>) -> @location(0) vec4<f32> {
-    // `viewport_pos` is the current pixel location (center, ending in .5) in viewport coordinates.
-    // This can be casted to vec2<u32> for discrete locations.
     let viewport_pos = in.xy;
     let image_pos = (viewport_pos - image_info.start) / image_info.zoom;
 

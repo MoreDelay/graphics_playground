@@ -178,10 +178,7 @@ impl Ready {
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("Main Device"),
                     required_features,
-                    required_limits: wgpu::Limits {
-                        max_texture_dimension_2d: 16384,
-                        ..wgpu::Limits::default()
-                    },
+                    required_limits: wgpu::Limits::default(),
                     memory_hints: wgpu::MemoryHints::MemoryUsage,
                     trace: wgpu::Trace::Off,
                     experimental_features: wgpu::ExperimentalFeatures::disabled(),

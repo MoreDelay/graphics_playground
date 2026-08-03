@@ -33,7 +33,7 @@ impl ImageWidget {
     pub fn new() -> Self {
         Self {
             image: None,
-            instruments: ImageInstruments::default(),
+            instruments: ImageInstruments::new(),
             params: DrawParameters::default(),
         }
     }
@@ -45,8 +45,8 @@ impl ImageWidget {
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
     ) -> Option<&PassThruTexture> {
-        if self.instruments.output().good().is_some() {
-            return self.instruments.output().good();
+        if self.instruments.output().is_some() {
+            return self.instruments.output();
         }
 
         let params = self.params;
@@ -57,7 +57,7 @@ impl ImageWidget {
             ImageFilter::Lanczos => self.lanczos(ctx, target, encoder, viewport, &params),
         }
 
-        self.instruments.output().good()
+        self.instruments.output()
     }
 
     pub fn update(&mut self, message: ImageMessage) {
@@ -94,15 +94,9 @@ impl ImageWidget {
             return;
         };
 
-        render::nearest(
-            image,
-            &mut self.instruments,
-            ctx,
-            target,
-            encoder,
-            viewport,
-            params,
-        );
+        self.instruments.uncheck_all();
+        self.instruments
+            .nearest(image, ctx, target, encoder, viewport, params);
     }
 
     fn bilinear(
@@ -117,15 +111,9 @@ impl ImageWidget {
             return;
         };
 
-        render::bilinear(
-            image,
-            &mut self.instruments,
-            ctx,
-            target,
-            encoder,
-            viewport,
-            params,
-        );
+        self.instruments.uncheck_all();
+        self.instruments
+            .bilinear(image, ctx, target, encoder, viewport, params);
     }
 
     fn lanczos(
@@ -140,15 +128,9 @@ impl ImageWidget {
             return;
         };
 
-        render::lanczos(
-            image,
-            &mut self.instruments,
-            ctx,
-            target,
-            encoder,
-            viewport,
-            params,
-        );
+        self.instruments.uncheck_all();
+        self.instruments
+            .lanczos(image, ctx, target, encoder, viewport, params);
     }
 
     fn set_image(&mut self, image: ImageLoaded) {
@@ -298,6 +280,14 @@ impl ImageLoaded {
         PhysicalSize {
             width: self.image.width(),
             height: self.image.height(),
+        }
+    }
+
+    pub fn extent(&self) -> wgpu::Extent3d {
+        wgpu::Extent3d {
+            width: self.image.width(),
+            height: self.image.height(),
+            depth_or_array_layers: 1,
         }
     }
 

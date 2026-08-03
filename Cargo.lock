@@ -1498,7 +1498,6 @@ dependencies = [
  "rfd",
  "tracing",
  "tracing-subscriber",
- "tristate",
  "wesl",
 ]
 
@@ -4188,10 +4187,6 @@ dependencies = [
  "tracing-core",
  "tracing-log",
 ]
-
-[[package]]
-name = "tristate"
-version = "0.1.0"
 
 [[package]]
 name = "ttf-parser"

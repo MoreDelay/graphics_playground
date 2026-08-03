@@ -1,7 +1,6 @@
 use std::range::Range;
 
 use iced::wgpu;
-use tristate::TriStore;
 
 use crate::image::{DrawParameters, ImageLoaded};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
@@ -28,50 +27,62 @@ use crate::instruments::{GpuContext, TargetContext};
 
 pub mod mipmap;
 
-pub fn nearest(
-    image: &ImageLoaded,
-    instruments: &mut ImageInstruments,
-    ctx: &GpuContext,
-    target: &TargetContext,
-    encoder: &mut wgpu::CommandEncoder,
-    viewport: &Viewport,
-    params: &DrawParameters,
-) {
-    let output = instruments
-        .output
-        .any_or_set_bad(|| viewport.create_texture(ctx).expect("should work"));
-    if output.good().is_some() {
-        return;
+#[derive(Default)]
+pub struct ImageInstruments {
+    output: Use<PassThruTexture>,
+    original: Use<SimpleTexture>,
+    params: Use<DrawParameters>,
+
+    storage_layout: Use<StorageSrcDstLayout>,
+    kernel_layout: Use<KernelLayout>,
+    convolution_layout: Use<ConvolutionPipelineLayout>,
+    convolution_pipeline: Use<ConvolutionPipeline>,
+
+    copy_machine: Use<StorageTextureCopyMachine>,
+    storage_data: Use<SimpleStorageTexture>,
+    storage_scratch: Use<SimpleStorageTexture>,
+    kernel_bind: Use<KernelBinding>,
+    blurred: Use<SimpleTexture>,
+
+    texture_layout: Use<SimpleTextureLayout>,
+    buffer_layout: Use<SimpleBufferBindLayout>,
+
+    simple_pipeline_layout: Use<SimpleImageRenderPipelineLayout>,
+    lanczos_pipeline_layout: Use<LanczosImageRenderPipelineLayout>,
+    nearest_pipeline: Use<RenderNearestPipeline>,
+    bilinear_pipeline: Use<RenderBilinearPipeline>,
+    lanczos_pipeline: Use<RenderLanczosPipeline>,
+
+    meta_buffer: Use<SimpleBufferBind<ImageMetadataRaw>>,
+    lanczos_buffer: Use<SimpleBufferBind<LanczosInfoRaw>>,
+}
+
+impl ImageInstruments {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    let texture_layout = instruments
-        .texture_layout
-        .good_or_set(|| SimpleTextureLayout::new(ctx, None));
-    let original = instruments.original.good_or_set(|| {
-        let texture = image.upload(ctx, None);
-        SimpleTexture::new(ctx, texture_layout, texture, None)
-    });
+    pub fn nearest(
+        &mut self,
+        image: &ImageLoaded,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: &Viewport,
+        params: &DrawParameters,
+    ) {
+        let Some(output) = self.create_output(ctx, viewport) else {
+            return;
+        };
 
-    let buffer_layout = instruments
-        .buffer_layout
-        .good_or_set(|| SimpleBufferBindLayout::new(ctx, None));
-    let pipeline_layout = instruments
-        .simple_pipeline_layout
-        .good_or_set(|| SimpleImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
-    let pipeline = instruments
-        .nearest_pipeline
-        .good_or_set(|| RenderNearestPipeline::new(ctx, pipeline_layout, target.config.format));
+        self.create_original(ctx, image);
+        self.create_meta_buffer(ctx, params);
+        self.create_nearest_pipeline(ctx, target);
 
-    let meta = params.raw_metadata();
-    let meta_buffer = instruments
-        .meta_buffer
-        .any_or_set_good(|| {
-            let meta_buffer = SimpleBuffer::new(ctx, meta, None);
-            SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None)
-        })
-        .or_update(|b| b.buffer().update(ctx, meta));
+        let original = self.original.active();
+        let meta_buffer = self.meta_buffer.active();
+        let pipeline = self.nearest_pipeline.active();
 
-    output.or_update(|output| {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Nearest Image Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -89,53 +100,31 @@ pub fn nearest(
         });
 
         pipeline.draw(&mut pass, original, meta_buffer);
-    });
-}
 
-pub fn bilinear(
-    image: &ImageLoaded,
-    instruments: &mut ImageInstruments,
-    ctx: &GpuContext,
-    target: &TargetContext,
-    encoder: &mut wgpu::CommandEncoder,
-    viewport: &Viewport,
-    params: &DrawParameters,
-) {
-    let output = instruments
-        .output
-        .any_or_set_bad(|| viewport.create_texture(ctx).expect("should work"));
-    if output.good().is_some() {
-        return;
+        self.output = Use::Active(output);
     }
 
-    let texture_layout = instruments
-        .texture_layout
-        .good_or_set(|| SimpleTextureLayout::new(ctx, None));
-    let original = instruments.original.good_or_set(|| {
-        let texture = image.upload(ctx, None);
-        SimpleTexture::new(ctx, texture_layout, texture, None)
-    });
+    pub fn bilinear(
+        &mut self,
+        image: &ImageLoaded,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: &Viewport,
+        params: &DrawParameters,
+    ) {
+        let Some(output) = self.create_output(ctx, viewport) else {
+            return;
+        };
 
-    let buffer_layout = instruments
-        .buffer_layout
-        .good_or_set(|| SimpleBufferBindLayout::new(ctx, None));
-    let pipeline_layout = instruments
-        .simple_pipeline_layout
-        .good_or_set(|| SimpleImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
-    let pipeline = instruments
-        .bilinear_pipeline
-        .good_or_set(|| RenderBilinearPipeline::new(ctx, pipeline_layout, target.config.format));
+        self.create_meta_buffer(ctx, params);
+        self.create_original(ctx, image);
+        self.create_bilinear_pipeline(ctx, target);
 
-    let meta = params.raw_metadata();
-    let meta_buffer = instruments
-        .meta_buffer
-        .any_or_set_good(|| {
-            let meta_buffer = SimpleBuffer::new(ctx, meta, None);
-            SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None)
-        })
-        .or_update(|b| b.buffer().update(ctx, meta));
+        let meta_buffer = self.meta_buffer.active();
+        let original = self.original.active();
+        let pipeline = self.bilinear_pipeline.active();
 
-    output.or_update(|output| {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bilinear Image Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -153,128 +142,40 @@ pub fn bilinear(
         });
 
         pipeline.draw(&mut pass, original, meta_buffer);
-    });
-}
 
-#[expect(clippy::too_many_lines)]
-pub fn lanczos(
-    image: &ImageLoaded,
-    instruments: &mut ImageInstruments,
-    ctx: &GpuContext,
-    target: &TargetContext,
-    encoder: &mut wgpu::CommandEncoder,
-    viewport: &Viewport,
-    params: &DrawParameters,
-) {
-    let output = instruments
-        .output
-        .any_or_set_bad(|| viewport.create_texture(ctx).expect("should work"));
-    if output.good().is_some() {
-        return;
+        self.output = Use::Active(output);
     }
 
-    let texture_layout = instruments
-        .texture_layout
-        .good_or_set(|| SimpleTextureLayout::new(ctx, None));
-    let original = instruments.original.good_or_set(|| {
-        let texture = image.upload(ctx, None);
-        SimpleTexture::new(ctx, texture_layout, texture, None)
-    });
-    let original_texture = original.texture();
+    pub fn lanczos(
+        &mut self,
+        image: &ImageLoaded,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        encoder: &mut wgpu::CommandEncoder,
+        viewport: &Viewport,
+        params: &DrawParameters,
+    ) {
+        let Some(output) = self.create_output(ctx, viewport) else {
+            return;
+        };
 
-    // Blur image with gaussian filter
-    let kernel_layout = instruments
-        .kernel_layout
-        .good_or_set(|| KernelLayout::new(ctx, None));
+        // Interpolate with Lanczos filter
+        self.create_blurred(ctx, encoder, image, params);
+        self.create_lanczos_pipeline(ctx, target);
+        self.create_meta_buffer(ctx, params);
+        self.create_lanczos_buffer(ctx, params);
 
-    let kernel_bind = instruments.kernel_bind.any_or_try_set_good(|| {
-        params
-            .raw_blur_kernel()
-            .map(|kernel| KernelBinding::new(ctx, kernel_layout, &kernel, None))
-    });
-
-    let blurred = match kernel_bind {
-        None => original,
-        Some(kernel_bind) => instruments.blurred.good_or_set(|| {
-            let storage_layout = instruments
-                .storage_layout
-                .good_or_set(|| StorageSrcDstLayout::new(ctx, None));
-            let convolution_layout = instruments.convolution_layout.good_or_set(|| {
-                ConvolutionPipelineLayout::new(ctx, storage_layout, kernel_layout, None)
-            });
-            let convolution_pipeline = instruments
-                .convolution_pipeline
-                .good_or_set(|| ConvolutionPipeline::new(ctx, convolution_layout, None));
-
-            let copy_machine = instruments
-                .copy_machine
-                .good_or_set(|| StorageTextureCopyMachine::new(ctx, original_texture.format()));
-
-            let storage_data = instruments
-                .storage_data
-                .good_or_set(|| SimpleStorageTexture::empty(ctx, original_texture, None));
-            let storage_scratch = instruments
-                .storage_scratch
-                .good_or_set(|| SimpleStorageTexture::empty(ctx, original_texture, None));
-            storage_data.copy_from_texture(
-                ctx,
-                encoder,
-                copy_machine,
-                original_texture,
-                Range::from(0..1),
-            );
-
-            convolution_pipeline.run(
-                ctx,
-                encoder,
-                storage_layout,
-                storage_data,
-                storage_scratch,
-                kernel_bind.good().expect("no bad kernel bind ever"),
-                0,
-            );
-
-            let blurred = SimpleTexture::empty(ctx, texture_layout, original_texture, None);
-            storage_data.copy_to_texture(
-                ctx,
-                encoder,
-                copy_machine,
-                blurred.texture(),
-                Range::from(0..1),
-            );
+        let blurred = if let Some(blurred) = &self.blurred.maybe_active() {
             blurred
-        }),
-    };
+        } else {
+            self.create_original(ctx, image);
+            self.original.active()
+        };
 
-    // Interpolate with Lanczos filter
-    let buffer_layout = instruments
-        .buffer_layout
-        .good_or_set(|| SimpleBufferBindLayout::new(ctx, None));
-    let pipeline_layout = instruments
-        .lanczos_pipeline_layout
-        .good_or_set(|| LanczosImageRenderPipelineLayout::new(ctx, texture_layout, buffer_layout));
-    let pipeline = instruments
-        .lanczos_pipeline
-        .good_or_set(|| RenderLanczosPipeline::new(ctx, pipeline_layout, target.config.format));
+        let pipeline = self.lanczos_pipeline.active();
+        let meta_buffer = self.meta_buffer.active();
+        let lanczos_buffer = self.lanczos_buffer.active();
 
-    let meta = params.raw_metadata();
-    let meta_buffer = instruments
-        .meta_buffer
-        .any_or_set_good(|| {
-            let meta_buffer = SimpleBuffer::new(ctx, meta, None);
-            SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None)
-        })
-        .or_update(|b| b.buffer().update(ctx, meta));
-    let lanczos = params.raw_lanczos();
-    let lanczos_buffer = instruments
-        .lanczos_buffer
-        .any_or_set_good(|| {
-            let lanczos = SimpleBuffer::new(ctx, lanczos, None);
-            SimpleBufferBind::new(ctx, lanczos, buffer_layout, None)
-        })
-        .or_update(|b| b.buffer().update(ctx, lanczos));
-
-    output.or_update(|output| {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Lanczos Image Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -292,7 +193,362 @@ pub fn lanczos(
         });
 
         pipeline.draw(&mut pass, blurred, meta_buffer, lanczos_buffer);
-    });
+
+        self.output = Use::Active(output);
+    }
+
+    pub fn uncheck_all(&mut self) {
+        self.output.uncheck();
+        self.original.uncheck();
+        self.params.uncheck();
+
+        self.storage_layout.uncheck();
+        self.kernel_layout.uncheck();
+        self.convolution_layout.uncheck();
+        self.convolution_pipeline.uncheck();
+
+        self.copy_machine.uncheck();
+        self.storage_data.uncheck();
+        self.storage_scratch.uncheck();
+        self.kernel_bind.uncheck();
+        self.blurred.uncheck();
+
+        self.texture_layout.uncheck();
+        self.buffer_layout.uncheck();
+
+        self.simple_pipeline_layout.uncheck();
+        self.lanczos_pipeline_layout.uncheck();
+        self.nearest_pipeline.uncheck();
+        self.bilinear_pipeline.uncheck();
+        self.lanczos_pipeline.uncheck();
+
+        self.meta_buffer.uncheck();
+        self.lanczos_buffer.uncheck();
+    }
+}
+
+impl ImageInstruments {
+    fn create_texture_layout(&mut self, ctx: &GpuContext) {
+        if self.texture_layout.checked() {
+            return;
+        }
+
+        let out = SimpleTextureLayout::new(ctx, None);
+        self.texture_layout = Use::Active(out);
+    }
+
+    fn create_buffer_layout(&mut self, ctx: &GpuContext) {
+        if self.buffer_layout.checked() {
+            return;
+        }
+        let out = SimpleBufferBindLayout::new(ctx, None);
+        self.buffer_layout = Use::Active(out);
+    }
+
+    fn create_simple_pipeline_layout(&mut self, ctx: &GpuContext) {
+        if self.simple_pipeline_layout.checked() {
+            return;
+        }
+
+        self.create_texture_layout(ctx);
+        self.create_buffer_layout(ctx);
+
+        let texture = self.texture_layout.active();
+        let buffer = self.buffer_layout.active();
+
+        let pipeline = SimpleImageRenderPipelineLayout::new(ctx, texture, buffer);
+        self.simple_pipeline_layout = Use::Active(pipeline);
+    }
+
+    fn create_nearest_pipeline(&mut self, ctx: &GpuContext, target: &TargetContext) {
+        if self.nearest_pipeline.checked() {
+            return;
+        }
+
+        self.create_simple_pipeline_layout(ctx);
+        let pipeline = self.simple_pipeline_layout.active();
+
+        let pipeline = RenderNearestPipeline::new(ctx, pipeline, target.config.format);
+        self.nearest_pipeline = Use::Active(pipeline);
+    }
+
+    fn create_bilinear_pipeline(&mut self, ctx: &GpuContext, target: &TargetContext) {
+        if self.bilinear_pipeline.checked() {
+            return;
+        }
+
+        self.create_simple_pipeline_layout(ctx);
+        let pipeline = self.simple_pipeline_layout.active();
+
+        let pipeline = RenderBilinearPipeline::new(ctx, pipeline, target.config.format);
+        self.bilinear_pipeline = Use::Active(pipeline);
+    }
+
+    fn create_meta_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
+        match self.meta_buffer.take() {
+            Use::Missing => {
+                self.create_buffer_layout(ctx);
+                let buffer_layout = self.buffer_layout.active();
+
+                let meta = params.raw_metadata();
+                let meta_buffer = SimpleBuffer::new(ctx, meta, None);
+                let meta_buffer = SimpleBufferBind::new(ctx, meta_buffer, buffer_layout, None);
+                self.meta_buffer = Use::Active(meta_buffer);
+            }
+            Use::Recycle(b) | Use::Unused(b) => {
+                let meta = params.raw_metadata();
+                b.buffer().update(ctx, meta);
+                self.meta_buffer = Use::Active(b);
+            }
+            out @ (Use::Invalid | Use::Active(_)) => {
+                self.meta_buffer = out;
+            }
+        }
+    }
+
+    fn create_original(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+        if self.original.checked() {
+            return;
+        }
+
+        self.create_texture_layout(ctx);
+        let texture_layout = self.texture_layout.active();
+        let texture = image.upload(ctx, None);
+        let original = SimpleTexture::new(ctx, texture_layout, texture, None);
+        self.original = Use::Active(original);
+    }
+
+    fn create_kernel_layout(&mut self, ctx: &GpuContext) {
+        if self.kernel_layout.checked() {
+            return;
+        }
+
+        self.kernel_layout = Use::Active(KernelLayout::new(ctx, None));
+    }
+
+    fn create_kernel_bind(&mut self, ctx: &GpuContext, params: &DrawParameters) {
+        if self.kernel_bind.checked() {
+            return;
+        }
+
+        self.kernel_bind = match params.raw_blur_kernel() {
+            Some(kernel) => {
+                self.create_kernel_layout(ctx);
+                let layout = self.kernel_layout.active();
+                Use::Active(KernelBinding::new(ctx, layout, &kernel, None))
+            }
+            None => Use::Invalid,
+        };
+    }
+
+    fn create_storage_layout(&mut self, ctx: &GpuContext) {
+        if self.storage_layout.checked() {
+            return;
+        }
+
+        self.storage_layout = Use::Active(StorageSrcDstLayout::new(ctx, None));
+    }
+
+    fn create_convolution_layout(&mut self, ctx: &GpuContext) {
+        if self.convolution_layout.checked() {
+            return;
+        }
+
+        self.create_storage_layout(ctx);
+        self.create_kernel_layout(ctx);
+        let storage = self.storage_layout.active();
+        let kernel = self.kernel_layout.active();
+
+        let convolution = ConvolutionPipelineLayout::new(ctx, storage, kernel, None);
+        self.convolution_layout = Use::Active(convolution);
+    }
+
+    fn create_convolution_pipeline(&mut self, ctx: &GpuContext) {
+        if self.convolution_pipeline.checked() {
+            return;
+        }
+        self.create_convolution_layout(ctx);
+        let convolution = self.convolution_layout.active();
+
+        let convolution = ConvolutionPipeline::new(ctx, convolution, None);
+        self.convolution_pipeline = Use::Active(convolution);
+    }
+
+    fn create_copy_machine(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+        if self.copy_machine.checked() {
+            return;
+        }
+
+        self.create_original(ctx, image);
+        let format = self.original.active().texture().format();
+
+        let copy_machine = StorageTextureCopyMachine::new(ctx, format);
+        self.copy_machine = Use::Active(copy_machine);
+    }
+
+    fn create_storage_data(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+        if self.storage_data.checked() {
+            return;
+        }
+
+        self.create_original(ctx, image);
+        let original = self.original.active();
+
+        let storage = SimpleStorageTexture::empty(ctx, original.texture(), None);
+        self.storage_data = Use::Active(storage);
+    }
+
+    fn create_storage_scratch(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+        if self.storage_scratch.checked() {
+            return;
+        }
+
+        self.create_original(ctx, image);
+        let original = self.original.active();
+
+        let storage = SimpleStorageTexture::empty(ctx, original.texture(), None);
+        self.storage_scratch = Use::Active(storage);
+    }
+
+    fn create_lanczos_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
+        match self.lanczos_buffer.take() {
+            Use::Missing => {
+                self.create_buffer_layout(ctx);
+                let layout = self.buffer_layout.active();
+                let buffer = params.raw_lanczos();
+                let buffer = SimpleBuffer::new(ctx, buffer, None);
+                let buffer = SimpleBufferBind::new(ctx, buffer, layout, None);
+                self.lanczos_buffer = Use::Active(buffer);
+            }
+            Use::Recycle(b) | Use::Unused(b) => {
+                let data = params.raw_lanczos();
+                b.buffer().update(ctx, data);
+                self.lanczos_buffer = Use::Active(b);
+            }
+            out @ (Use::Invalid | Use::Active(_)) => {
+                self.lanczos_buffer = out;
+            }
+        }
+    }
+
+    fn create_lanczos_pipeline_layout(&mut self, ctx: &GpuContext) {
+        if self.lanczos_pipeline_layout.checked() {
+            return;
+        }
+
+        self.create_texture_layout(ctx);
+        self.create_buffer_layout(ctx);
+        let texture = self.texture_layout.active();
+        let buffer = self.buffer_layout.active();
+
+        let pipeline = LanczosImageRenderPipelineLayout::new(ctx, texture, buffer);
+        self.lanczos_pipeline_layout = Use::Active(pipeline);
+    }
+
+    fn create_lanczos_pipeline(&mut self, ctx: &GpuContext, target: &TargetContext) {
+        if self.lanczos_pipeline.checked() {
+            return;
+        }
+
+        self.create_lanczos_pipeline_layout(ctx);
+        let layout = self.lanczos_pipeline_layout.active();
+
+        let pipeline = RenderLanczosPipeline::new(ctx, layout, target.config.format);
+        self.lanczos_pipeline = Use::Active(pipeline);
+    }
+
+    fn create_output(&mut self, ctx: &GpuContext, viewport: &Viewport) -> Option<PassThruTexture> {
+        let Some(extend) = viewport.extent() else {
+            self.output = self.output.take().make_unused();
+            return None;
+        };
+
+        match self.output.take() {
+            checked @ (Use::Active(_) | Use::Invalid) => {
+                self.output = checked;
+                None
+            }
+            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extend => {
+                Some(output)
+            }
+            Use::Recycle(_) | Use::Unused(_) | Use::Missing => viewport.create_texture(ctx),
+        }
+    }
+
+    fn create_blurred(
+        &mut self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        image: &ImageLoaded,
+        params: &DrawParameters,
+    ) {
+        self.create_kernel_bind(ctx, params);
+
+        if !matches!(&self.kernel_bind, Use::Active(_)) {
+            self.blurred = self.blurred.take().make_unused();
+            return;
+        }
+
+        let blurred = match self.blurred.take() {
+            checked @ (Use::Active(_) | Use::Invalid) => {
+                self.blurred = checked;
+                return;
+            }
+            Use::Recycle(t) | Use::Unused(t) if t.texture().size() == image.extent() => t,
+            Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
+                self.create_texture_layout(ctx);
+                self.create_original(ctx, image);
+                let texture = self.texture_layout.active();
+                let original = self.original.active();
+
+                SimpleTexture::empty(ctx, texture, original.texture(), None)
+            }
+        };
+
+        self.create_convolution_pipeline(ctx);
+        self.create_copy_machine(ctx, image);
+        self.create_storage_layout(ctx);
+        self.create_storage_data(ctx, image);
+        self.create_storage_scratch(ctx, image);
+        self.create_original(ctx, image);
+
+        let convolution_pipeline = self.convolution_pipeline.active();
+        let copy_machine = self.copy_machine.active();
+        let storage_layout = self.storage_layout.active();
+        let storage_data = self.storage_data.active();
+        let storage_scratch = self.storage_scratch.active();
+        let original = self.original.active();
+
+        let kernel_bind = self.kernel_bind.active();
+
+        storage_data.copy_from_texture(
+            ctx,
+            encoder,
+            copy_machine,
+            original.texture(),
+            Range::from(0..1),
+        );
+
+        convolution_pipeline.run(
+            ctx,
+            encoder,
+            storage_layout,
+            storage_data,
+            storage_scratch,
+            kernel_bind,
+            0,
+        );
+
+        storage_data.copy_to_texture(
+            ctx,
+            encoder,
+            copy_machine,
+            blurred.texture(),
+            Range::from(0..1),
+        );
+
+        self.blurred = Use::Active(blurred);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -303,39 +559,12 @@ pub enum ImageFilter {
     Lanczos,
 }
 
-#[derive(Default)]
-pub struct ImageInstruments {
-    output: TriStore<PassThruTexture>,
-    original: TriStore<SimpleTexture>,
-    params: TriStore<DrawParameters>,
-
-    storage_layout: TriStore<StorageSrcDstLayout>,
-    kernel_layout: TriStore<KernelLayout>,
-    convolution_layout: TriStore<ConvolutionPipelineLayout>,
-    convolution_pipeline: TriStore<ConvolutionPipeline>,
-
-    copy_machine: TriStore<StorageTextureCopyMachine>,
-    storage_data: TriStore<SimpleStorageTexture>,
-    storage_scratch: TriStore<SimpleStorageTexture>,
-    kernel_bind: TriStore<KernelBinding>,
-    blurred: TriStore<SimpleTexture>,
-
-    texture_layout: TriStore<SimpleTextureLayout>,
-    buffer_layout: TriStore<SimpleBufferBindLayout>,
-
-    simple_pipeline_layout: TriStore<SimpleImageRenderPipelineLayout>,
-    lanczos_pipeline_layout: TriStore<LanczosImageRenderPipelineLayout>,
-    nearest_pipeline: TriStore<RenderNearestPipeline>,
-    bilinear_pipeline: TriStore<RenderBilinearPipeline>,
-    lanczos_pipeline: TriStore<RenderLanczosPipeline>,
-
-    meta_buffer: TriStore<SimpleBufferBind<ImageMetadataRaw>>,
-    lanczos_buffer: TriStore<SimpleBufferBind<LanczosInfoRaw>>,
-}
-
 impl ImageInstruments {
-    pub const fn output(&self) -> &TriStore<PassThruTexture> {
-        &self.output
+    pub const fn output(&self) -> Option<&PassThruTexture> {
+        let Use::Active(output) = &self.output else {
+            return None;
+        };
+        Some(output)
     }
 
     #[expect(dead_code)]
@@ -396,5 +625,72 @@ impl ImageInstruments {
 
         self.meta_buffer.keep();
         self.lanczos_buffer.discard();
+    }
+}
+
+#[derive(Default)]
+enum Use<T> {
+    #[default]
+    Missing,
+    Invalid,
+    Active(T),
+    Recycle(T),
+    Unused(T),
+}
+
+impl<T> Use<T> {
+    fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+
+    const fn checked(&self) -> bool {
+        matches!(self, Self::Active(_) | Self::Unused(_))
+    }
+
+    fn uncheck(&mut self) {
+        *self = match self.take() {
+            Self::Missing | Self::Invalid => Self::Missing,
+            Self::Active(v) => Self::Active(v),
+            Self::Recycle(v) | Self::Unused(v) => Self::Recycle(v),
+        }
+    }
+
+    fn active(&self) -> &T {
+        let Self::Active(v) = self else {
+            panic!("value is not in active use");
+        };
+        v
+    }
+
+    fn maybe_active(&self) -> Option<&T> {
+        match self {
+            Self::Missing | Self::Recycle(_) => panic!("value still unchecked"),
+            Self::Active(v) => Some(v),
+            Self::Invalid | Self::Unused(_) => None,
+        }
+    }
+
+    fn degrade(&mut self) {
+        *self = match self.take() {
+            Self::Missing => Self::Invalid,
+            Self::Invalid => Self::Invalid,
+            Self::Active(v) => Self::Unused(v),
+            Self::Recycle(v) => Self::Unused(v),
+            Self::Unused(v) => Self::Unused(v),
+        }
+    }
+
+    fn discard(&mut self) {
+        *self = Self::Missing;
+    }
+
+    #[expect(clippy::unused_self)]
+    const fn keep(&self) {}
+
+    fn make_unused(self) -> Self {
+        match self {
+            Self::Missing | Self::Invalid => Self::Invalid,
+            Self::Active(v) | Self::Recycle(v) | Self::Unused(v) => Self::Unused(v),
+        }
     }
 }

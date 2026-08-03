@@ -5,7 +5,7 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["parsers", "tristate"]
+members = ["parsers"]
 
 [dependencies]
 bytemuck = "1.25.0"
@@ -35,8 +35,6 @@ rfd = "0.17.2"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.20"
 wesl = "0.4.0"
-
-tristate = { path = "tristate" }
 
 [lints.clippy]
 nursery = { level = "warn", priority = -1 }

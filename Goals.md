@@ -11,4 +11,4 @@
 ## Immediate targets
 - [x] Render on resize only to texture with viewport size (to fix crash on zoom in)
     - [ ] Reuse previous filter computation on pan
-- [ ] Replace mipmap with purposefully blurred image based on zoom level
+- [x] Replace mipmap with purposefully blurred image based on zoom level

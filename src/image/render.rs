@@ -590,14 +590,6 @@ impl ImageInstruments {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ImageFilter {
-    #[default]
-    Nearest,
-    BiLinear,
-    Lanczos,
-}
-
 impl ImageInstruments {
     pub const fn output(&self) -> Option<&PassThruTexture> {
         let Use::Active(output) = &self.output else {

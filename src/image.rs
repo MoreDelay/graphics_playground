@@ -9,9 +9,10 @@ use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
 use crate::image::filters::GaussFilter;
+use crate::image::render::ImageInstruments;
 use crate::image::render::mipmap::MipMapper;
-use crate::image::render::{ImageFilter, ImageInstruments};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
+use crate::instruments::pipeline::ImageFilter;
 use crate::instruments::pipeline::passthru::PassThruTexture;
 use crate::instruments::viewport::{VPPoint, VPVector, Viewport};
 use crate::instruments::{GpuContext, TargetContext};

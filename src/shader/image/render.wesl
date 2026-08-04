@@ -1,7 +1,7 @@
-struct ImageInfo {
-    start: vec2<f32>,
-    zoom: f32,
-}
+import package::image::target::ImageInfo;
+import package::image::filter::bilinear::filter_bilinear;
+import package::image::filter::nearest::filter_nearest;
+import package::image::filter::lanczos::{filter_lanczos, LanczosInfo};
 
 @group(0) @binding(0)
 var t_image: texture_2d<f32>;
@@ -9,71 +9,19 @@ var t_image: texture_2d<f32>;
 @group(1) @binding(0)
 var<uniform> image_info: ImageInfo;
 
-fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
-    let tl = (1. - fract.x) * (1. - fract.y);
-    let bl = (1. - fract.x) * fract.y;
-    let left = vec2(tl, bl);
-
-    let tr = fract.x * (1. - fract.y);
-    let br = fract.x * fract.y;
-    let right = vec2(tr, br);
-
-    return mat2x2(left, right);
-}
-
-fn filter_bilinear(image_pos: vec2<f32>) -> vec4<f32> {
-    let dims = textureDimensions(t_image);
-    let dims_f = vec2<f32>(dims);
-    let inside = 0. <= image_pos.x && image_pos.x <= dims_f.x
-              && 0. <= image_pos.y && image_pos.y <= dims_f.y;
-    if !inside { discard; }
-
-    let level_f = max(0., floor(log2(1. / image_info.zoom)));
-    let level = u32(level_f);
-
-    let pos_level_f = image_pos / exp2(level_f);
-    let dims_level = dims >> vec2(level, level);
-
-    let shift_lo = pos_level_f - vec2(0.5, 0.5);
-    let shift_hi = shift_lo + vec2(1., 1.);
-    let image_max = vec2<f32>(dims_level - vec2(1, 1));
-
-    let lo = vec2<u32>(clamp(shift_lo, vec2(0., 0.), image_max));
-    let hi = vec2<u32>(clamp(shift_hi, vec2(0., 0.), image_max));
-
-    let lo_lo = vec2(lo.x, lo.y);
-    let lo_hi = vec2(lo.x, hi.y);
-    let hi_lo = vec2(hi.x, lo.y);
-    let hi_hi = vec2(hi.x, hi.y);
-
-    let weights = bilinear_weights(fract(shift_lo));
-    let lerp = weights[0][0] * textureLoad(t_image, lo_lo, level)
-             + weights[0][1] * textureLoad(t_image, lo_hi, level)
-             + weights[1][0] * textureLoad(t_image, hi_lo, level)
-             + weights[1][1] * textureLoad(t_image, hi_hi, level);
-    return lerp;
-}
-
-fn filter_nearest(image_pos: vec2<f32>) -> vec4<f32> {
-    let dims = vec2<f32>(textureDimensions(t_image));
-
-    let inside = 0 <= image_pos.x && image_pos.x < dims.x
-              && 0 <= image_pos.y && image_pos.y < dims.y;
-    if !inside { discard; }
-
-    let coords = vec2<u32>(floor(image_pos));
-    return textureLoad(t_image, coords, 0);
-}
+@if(FILTER_LANCZOS)
+@group(2)
+@binding(0)
+var<uniform> lanczos_info: LanczosInfo;
 
 @fragment
 fn fs_image(@builtin(position) in: vec4<f32>) -> @location(0) vec4<f32> {
-    let viewport_pos = in.xy;
-    let image_pos = (viewport_pos - image_info.start) / image_info.zoom;
-
     @if(FILTER_BILINEAR)
-    let color = filter_bilinear(image_pos);
-    @else
-    let color = filter_nearest(image_pos);
+    let color = filter_bilinear(t_image, image_info, in);
+    @elif(FILTER_LANCZOS)
+    let color = filter_lanczos(t_image, image_info, lanczos_info, in);
+    @elif(FILTER_NEAREST)
+    let color = filter_nearest(t_image, image_info, in);
 
     return color;
 }

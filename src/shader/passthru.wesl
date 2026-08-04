@@ -3,7 +3,7 @@ import package::vertex::VertexOut;
 @group(0) @binding(0)
 var t_src: texture_2d<f32>;
 @group(0) @binding(1)
-var s_src: sampler;
+var s_src: sampler; // should use nearest filter
 
 @fragment
 fn fs_passthru(in: VertexOut) -> @location(0) vec4<f32> {

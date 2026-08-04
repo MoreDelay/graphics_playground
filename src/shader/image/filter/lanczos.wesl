@@ -1,24 +1,8 @@
-struct ImageInfo {
-    start: vec2<f32>,
-    zoom: f32,
-}
+import package::image::target::ImageInfo;
 
 struct LanczosInfo {
     filter_size: f32,
 }
-
-
-@group(0)
-@binding(0)
-var src: texture_2d<f32>;
-
-@group(1)
-@binding(0)
-var<uniform> image_info: ImageInfo;
-
-@group(2)
-@binding(0)
-var<uniform> lanczos_info: LanczosInfo;
 
 const PI = radians(180.0);
 
@@ -36,8 +20,12 @@ fn lanczos_weight(x: f32, a: f32) -> f32 {
     return sinc(x) * sinc(x / a);
 }
 
-@fragment
-fn fs_lanczos(@builtin(position) pos_new: vec4<f32>) -> @location(0) vec4<f32> {
+fn filter_lanczos(
+    src: texture_2d<f32>,
+    image_info: ImageInfo,
+    lanczos_info: LanczosInfo,
+    pos_new: vec4<f32>,
+) -> vec4<f32> {
     let image_dims = textureDimensions(src);
 
     let viewport_pos = pos_new.xy;

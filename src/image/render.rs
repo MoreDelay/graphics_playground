@@ -25,8 +25,6 @@ use crate::instruments::pipeline::passthru::PassThruTexture;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
-pub mod mipmap;
-
 #[derive(Default)]
 pub struct ImageInstruments {
     output: Use<PassThruTexture>,

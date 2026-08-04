@@ -33,51 +33,59 @@ impl ConvolutionPipeline {
     pub fn run(
         &self,
         ctx: &GpuContext,
-        encoder: &mut wgpu::CommandEncoder,
+        pass: &mut wgpu::ComputePass,
         storage_layout: &StorageSrcDstLayout,
-        storage_data: &SimpleStorageTexture,
+        storage_src: &SimpleStorageTexture,
         storage_scratch: &SimpleStorageTexture,
+        storage_dst: &SimpleStorageTexture,
         kernel_bind: &KernelBinding,
         mip_level: u32,
     ) {
+        assert!(
+            !std::ptr::eq(storage_src, storage_scratch),
+            "source and scratch storage texture can not be the same",
+        );
+        assert!(
+            !std::ptr::eq(storage_scratch, storage_dst),
+            "destination and scratch storage texture can not be the same",
+        );
+
         let runner = ConvolutionRunner {
             storage_layout,
             pipeline: self,
-            storage_data,
+            storage_src,
             storage_scratch,
+            storage_dst,
             kernel_bind,
         };
 
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("MipMapper Compute Pass"),
-            timestamp_writes: None,
-        });
-        runner.run(ctx, &mut pass, mip_level);
+        runner.run(ctx, pass, mip_level);
     }
 }
 
 struct ConvolutionRunner<'a> {
     storage_layout: &'a StorageSrcDstLayout,
     pipeline: &'a ConvolutionPipeline,
-    storage_data: &'a SimpleStorageTexture,
+    storage_src: &'a SimpleStorageTexture,
     storage_scratch: &'a SimpleStorageTexture,
+    storage_dst: &'a SimpleStorageTexture,
     kernel_bind: &'a KernelBinding,
 }
 
 impl ConvolutionRunner<'_> {
     fn run(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
-        self.run_filter_data_to_scratch(ctx, pass, Axis::Y, mip_level);
-        self.run_filter_scratch_to_data(ctx, pass, Axis::X, mip_level);
+        self.run_filter_src_to_scratch(ctx, pass, Axis::Y, mip_level);
+        self.run_filter_scratch_to_dst(ctx, pass, Axis::X, mip_level);
     }
 
-    fn run_filter_data_to_scratch(
+    fn run_filter_src_to_scratch(
         &self,
         ctx: &GpuContext,
         pass: &mut wgpu::ComputePass,
         axis: Axis,
         mip_level: u32,
     ) {
-        let src_view = self.storage_data.create_view(&wgpu::TextureViewDescriptor {
+        let src_view = self.storage_src.create_view(&wgpu::TextureViewDescriptor {
             base_mip_level: mip_level,
             mip_level_count: Some(1),
             ..Default::default()
@@ -108,8 +116,9 @@ impl ConvolutionRunner<'_> {
             Axis::Y => self.kernel_bind.bind_group_y(),
         };
 
-        let dispatch_x = self.storage_data.width() >> mip_level; // divide by 2^mip_level
-        let dispatch_y = self.storage_data.height() >> mip_level;
+        // divide by 2^mip_level
+        let dispatch_x = self.storage_src.width() >> mip_level;
+        let dispatch_y = self.storage_src.height() >> mip_level;
         let dispatch_x = dispatch_x.div_ceil(16);
         let dispatch_y = dispatch_y.div_ceil(16);
 
@@ -119,7 +128,7 @@ impl ConvolutionRunner<'_> {
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
-    fn run_filter_scratch_to_data(
+    fn run_filter_scratch_to_dst(
         &self,
         ctx: &GpuContext,
         pass: &mut wgpu::ComputePass,
@@ -133,7 +142,7 @@ impl ConvolutionRunner<'_> {
                 mip_level_count: Some(1),
                 ..Default::default()
             });
-        let dst_view = self.storage_data.create_view(&wgpu::TextureViewDescriptor {
+        let dst_view = self.storage_dst.create_view(&wgpu::TextureViewDescriptor {
             base_mip_level: mip_level,
             mip_level_count: Some(1),
             ..Default::default()
@@ -157,8 +166,9 @@ impl ConvolutionRunner<'_> {
             Axis::Y => self.kernel_bind.bind_group_y(),
         };
 
-        let dispatch_x = self.storage_data.width() >> mip_level; // divide by 2^mip_level
-        let dispatch_y = self.storage_data.height() >> mip_level;
+        // divide by 2^mip_level
+        let dispatch_x = self.storage_dst.width() >> mip_level;
+        let dispatch_y = self.storage_dst.height() >> mip_level;
         let dispatch_x = dispatch_x.div_ceil(16);
         let dispatch_y = dispatch_y.div_ceil(16);
 

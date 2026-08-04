@@ -568,15 +568,22 @@ impl ImageInstruments {
             Range::from(0..1),
         );
 
-        convolution_pipeline.run(
-            ctx,
-            encoder,
-            storage_layout,
-            storage_data,
-            storage_scratch,
-            kernel_bind,
-            0,
-        );
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Blur Compute Pass"),
+                timestamp_writes: None,
+            });
+            convolution_pipeline.run(
+                ctx,
+                &mut pass,
+                storage_layout,
+                storage_data,
+                storage_scratch,
+                storage_data,
+                kernel_bind,
+                0,
+            );
+        }
 
         storage_data.copy_to_texture(
             ctx,

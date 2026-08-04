@@ -10,16 +10,21 @@ pub struct ConvolutionPipeline(wgpu::ComputePipeline);
 impl ConvolutionPipeline {
     const SHADER_CONVOLUTION: &str = "package::mipmap::convolution";
 
-    pub fn new(ctx: &GpuContext, layout: &ConvolutionPipelineLayout, label: Option<&str>) -> Self {
+    pub fn new(
+        ctx: &GpuContext,
+        layout: &ConvolutionPipelineLayout,
+        label_shader: Option<&str>,
+        label_pipeline: Option<&str>,
+    ) -> Self {
         let module = crate::instruments::create_simple_shader_module_desc(
-            Some("Convolution Shader"),
+            label_shader,
             Self::SHADER_CONVOLUTION,
         );
         let module = ctx.device.create_shader_module(module);
         let pipeline = ctx
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label,
+                label: label_pipeline,
                 layout: Some(layout),
                 module: &module,
                 entry_point: Some("convolve"),
@@ -50,56 +55,54 @@ impl ConvolutionPipeline {
             "destination and scratch storage texture can not be the same",
         );
 
-        let runner = ConvolutionRunner {
+        self.run_internal(
+            ctx,
+            pass,
             storage_layout,
-            pipeline: self,
             storage_src,
+            storage_scratch,
+            kernel_bind,
+            Axis::X,
+            mip_level,
+        );
+
+        self.run_internal(
+            ctx,
+            pass,
+            storage_layout,
             storage_scratch,
             storage_dst,
             kernel_bind,
-        };
-
-        runner.run(ctx, pass, mip_level);
-    }
-}
-
-struct ConvolutionRunner<'a> {
-    storage_layout: &'a StorageSrcDstLayout,
-    pipeline: &'a ConvolutionPipeline,
-    storage_src: &'a SimpleStorageTexture,
-    storage_scratch: &'a SimpleStorageTexture,
-    storage_dst: &'a SimpleStorageTexture,
-    kernel_bind: &'a KernelBinding,
-}
-
-impl ConvolutionRunner<'_> {
-    fn run(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, mip_level: u32) {
-        self.run_filter_src_to_scratch(ctx, pass, Axis::Y, mip_level);
-        self.run_filter_scratch_to_dst(ctx, pass, Axis::X, mip_level);
+            Axis::Y,
+            mip_level,
+        );
     }
 
-    fn run_filter_src_to_scratch(
+    #[expect(clippy::too_many_arguments)]
+    fn run_internal(
         &self,
         ctx: &GpuContext,
         pass: &mut wgpu::ComputePass,
+        storage_layout: &StorageSrcDstLayout,
+        storage_src: &SimpleStorageTexture,
+        storage_dst: &SimpleStorageTexture,
+        kernel_bind: &KernelBinding,
         axis: Axis,
         mip_level: u32,
     ) {
-        let src_view = self.storage_src.create_view(&wgpu::TextureViewDescriptor {
+        let src_view = storage_src.create_view(&wgpu::TextureViewDescriptor {
             base_mip_level: mip_level,
             mip_level_count: Some(1),
             ..Default::default()
         });
-        let dst_view = self
-            .storage_scratch
-            .create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: mip_level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            });
+        let dst_view = storage_dst.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: mip_level,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
         let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MipMapper Filter-1d Bind Group"),
-            layout: self.storage_layout,
+            layout: storage_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -112,67 +115,17 @@ impl ConvolutionRunner<'_> {
             ],
         });
         let kernel_bind = match axis {
-            Axis::X => self.kernel_bind.bind_group_x(),
-            Axis::Y => self.kernel_bind.bind_group_y(),
+            Axis::X => kernel_bind.bind_group_x(),
+            Axis::Y => kernel_bind.bind_group_y(),
         };
 
         // divide by 2^mip_level
-        let dispatch_x = self.storage_src.width() >> mip_level;
-        let dispatch_y = self.storage_src.height() >> mip_level;
+        let dispatch_x = storage_src.width() >> mip_level;
+        let dispatch_y = storage_src.height() >> mip_level;
         let dispatch_x = dispatch_x.div_ceil(16);
         let dispatch_y = dispatch_y.div_ceil(16);
 
-        pass.set_pipeline(&self.pipeline.0);
-        pass.set_bind_group(0, &texture_bind_group, &[]);
-        pass.set_bind_group(1, kernel_bind, &[]);
-        pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
-    }
-
-    fn run_filter_scratch_to_dst(
-        &self,
-        ctx: &GpuContext,
-        pass: &mut wgpu::ComputePass,
-        axis: Axis,
-        mip_level: u32,
-    ) {
-        let src_view = self
-            .storage_scratch
-            .create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: mip_level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            });
-        let dst_view = self.storage_dst.create_view(&wgpu::TextureViewDescriptor {
-            base_mip_level: mip_level,
-            mip_level_count: Some(1),
-            ..Default::default()
-        });
-        let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MipMapper Filter-1d Bind Group"),
-            layout: self.storage_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&src_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&dst_view),
-                },
-            ],
-        });
-        let kernel_bind = match axis {
-            Axis::X => self.kernel_bind.bind_group_x(),
-            Axis::Y => self.kernel_bind.bind_group_y(),
-        };
-
-        // divide by 2^mip_level
-        let dispatch_x = self.storage_dst.width() >> mip_level;
-        let dispatch_y = self.storage_dst.height() >> mip_level;
-        let dispatch_x = dispatch_x.div_ceil(16);
-        let dispatch_y = dispatch_y.div_ceil(16);
-
-        pass.set_pipeline(&self.pipeline.0);
+        pass.set_pipeline(&self.0);
         pass.set_bind_group(0, &texture_bind_group, &[]);
         pass.set_bind_group(1, kernel_bind, &[]);
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);

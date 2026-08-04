@@ -393,8 +393,12 @@ impl ImageInstruments {
         self.create_convolution_layout(ctx);
         let convolution = self.convolution_layout.active();
 
-        let convolution =
-            ConvolutionPipeline::new(ctx, convolution, Some("Image Convolution Pipeline"));
+        let convolution = ConvolutionPipeline::new(
+            ctx,
+            convolution,
+            Some("Image Convolution Shader"),
+            Some("Image Convolution Pipeline"),
+        );
         self.convolution_pipeline = Use::Active(convolution);
     }
 

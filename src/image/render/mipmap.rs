@@ -12,9 +12,10 @@ use crate::instruments::pipeline::filter::{
     KernelLayout,
     StorageSrcDstLayout,
 };
+use crate::instruments::pipeline::halfing::{HalfingPipeline, HalfingPipelineLayout};
 
 pub struct MipMapper {
-    halfing: wgpu::ComputePipeline,
+    halfing: HalfingPipeline,
     convolution: ConvolutionPipeline,
 
     storage_layout: StorageSrcDstLayout,
@@ -23,8 +24,6 @@ pub struct MipMapper {
 }
 
 impl MipMapper {
-    const SHADER_HALFING: &str = "package::mipmap::halfing";
-
     pub fn new(ctx: &GpuContext) -> Self {
         let storage_layout =
             StorageSrcDstLayout::new(ctx, Some("MipMapper Storage Texture Layout"));
@@ -55,29 +54,19 @@ impl MipMapper {
 
     fn create_pipeline_halfing(
         ctx: &GpuContext,
-        storage_layout: &wgpu::BindGroupLayout,
-    ) -> wgpu::ComputePipeline {
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("MipMapper Halfing Pipeline Layout"),
-                bind_group_layouts: &[storage_layout],
-                push_constant_ranges: &[],
-            });
-        let module = crate::instruments::create_simple_shader_module_desc(
-            Some("MipMapper Halfing Shader"),
-            Self::SHADER_HALFING,
+        storage_layout: &StorageSrcDstLayout,
+    ) -> HalfingPipeline {
+        let layout = HalfingPipelineLayout::new(
+            ctx,
+            storage_layout,
+            Some("MipMapper Halfing Pipeline Layout"),
         );
-        let module = ctx.device.create_shader_module(module);
-        ctx.device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("MipMapper Halfing Pipeline"),
-                layout: Some(&layout),
-                module: &module,
-                entry_point: Some("halfing"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            })
+        HalfingPipeline::new(
+            ctx,
+            &layout,
+            Some("MipMapper Halfing Shader"),
+            Some("MipMapper Halfing Pipeline"),
+        )
     }
 
     fn create_pipeline_convolution(
@@ -91,7 +80,12 @@ impl MipMapper {
             kernel_layout,
             Some("MipMapper Convolution Pipeline Layout"),
         );
-        ConvolutionPipeline::new(ctx, &layout, Some("MipMapper Convolution Pipeline"))
+        ConvolutionPipeline::new(
+            ctx,
+            &layout,
+            Some("MipMapper Convolution Shader"),
+            Some("MipMapper Convolution Pipeline"),
+        )
     }
 }
 
@@ -186,7 +180,14 @@ impl<'a> MipMapRunner<'a> {
                     &self.kernel_bind,
                     mip_level,
                 );
-                self.run_halfing(ctx, &mut pass, mip_level);
+                self.mip_mapper.halfing.run(
+                    ctx,
+                    &mut pass,
+                    &self.mip_mapper.storage_layout,
+                    &self.texture_filtered_2d,
+                    &self.texture_downsampled,
+                    mip_level,
+                );
             }
         }
 
@@ -202,48 +203,5 @@ impl<'a> MipMapRunner<'a> {
         }
 
         ctx.queue.submit([encoder.finish()]);
-    }
-
-    fn run_halfing(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, source_mip_level: u32) {
-        let target_mip_level = source_mip_level + 1;
-
-        let src_view = self
-            .texture_filtered_2d
-            .create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: source_mip_level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            });
-        let dst_view = self
-            .texture_downsampled
-            .create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: target_mip_level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            });
-        let texture_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MipMapper Halfing BindGroup"),
-            layout: &self.mip_mapper.storage_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&src_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&dst_view),
-                },
-            ],
-        });
-
-        // divide by 2^mip_level
-        let dispatch_x = self.texture_downsampled.width() >> target_mip_level;
-        let dispatch_y = self.texture_downsampled.height() >> target_mip_level;
-        let dispatch_x = dispatch_x.div_ceil(16);
-        let dispatch_y = dispatch_y.div_ceil(16);
-
-        pass.set_pipeline(&self.mip_mapper.halfing);
-        pass.set_bind_group(0, &texture_bind_group, &[]);
-        pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 }

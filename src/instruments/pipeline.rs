@@ -1,4 +1,5 @@
 pub mod filter;
+pub mod halfing;
 pub mod image;
 pub mod passthru;
 

@@ -2,7 +2,7 @@ use iced::wgpu;
 use image::EncodableLayout as _;
 
 use crate::instruments::GpuContext;
-use crate::instruments::bind::storage::SimpleStorageTexture;
+use crate::instruments::bind::storage::{SimpleStorageTexture, StorageSrcDstLayout};
 use crate::instruments::buffer::SimpleBuffer;
 
 pub struct ConvolutionPipeline(wgpu::ComputePipeline);
@@ -160,99 +160,6 @@ impl std::ops::Deref for ConvolutionPipelineLayout {
     }
 }
 
-pub struct StorageSrcDstLayout(wgpu::BindGroupLayout);
-
-impl StorageSrcDstLayout {
-    pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
-        let bind = ctx
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label,
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        Self(bind)
-    }
-}
-
-impl std::ops::Deref for StorageSrcDstLayout {
-    type Target = wgpu::BindGroupLayout;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-pub struct KernelLayout(wgpu::BindGroupLayout);
-
-impl KernelLayout {
-    pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
-        let bind = ctx
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label,
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: wgpu::TextureFormat::R32Float,
-                            view_dimension: wgpu::TextureViewDimension::D1,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        Self(bind)
-    }
-}
-
-impl std::ops::Deref for KernelLayout {
-    type Target = wgpu::BindGroupLayout;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Axis {
-    X = 0,
-    Y = 1,
-}
-
 pub struct KernelBinding {
     bind_group_x: wgpu::BindGroup,
     bind_group_y: wgpu::BindGroup,
@@ -393,14 +300,65 @@ impl std::ops::Deref for KernelBinding {
     }
 }
 
+pub struct KernelLayout(wgpu::BindGroupLayout);
+
+impl KernelLayout {
+    pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
+        let bind = ctx
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::ReadOnly,
+                            format: wgpu::TextureFormat::R32Float,
+                            view_dimension: wgpu::TextureViewDimension::D1,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        Self(bind)
+    }
+}
+
+impl std::ops::Deref for KernelLayout {
+    type Target = wgpu::BindGroupLayout;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    X = 0,
+    Y = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct KernelInfoRaw {
     /// Axis to apply the kernel on (x for 0, y for 1)
     axis: u32,
+    #[expect(clippy::doc_markdown)]
     /// How much the kernel is offset from the target location
     ///
-    /// In the (1-dimensional) formula `SUM_i [K(i) * T(p - o + i)]`, where p is the target
+    /// In the (1-dimensional) formula $\sum_i [K(i) \cdot T(p - o + i)],$ where p is the target
     /// location, K is the kernel array and T is the texture array, corresponds to the offset
     /// o.
     offset: u32,

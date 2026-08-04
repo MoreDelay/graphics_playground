@@ -1,31 +1,7 @@
 use iced::wgpu;
 
 use crate::instruments::GpuContext;
-use crate::instruments::bind::storage::SimpleStorageTexture;
-use crate::instruments::pipeline::filter::StorageSrcDstLayout;
-
-pub struct HalfingPipelineLayout(wgpu::PipelineLayout);
-
-impl HalfingPipelineLayout {
-    pub fn new(ctx: &GpuContext, storage: &StorageSrcDstLayout, label: Option<&str>) -> Self {
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label,
-                bind_group_layouts: &[storage],
-                push_constant_ranges: &[],
-            });
-        Self(layout)
-    }
-}
-
-impl std::ops::Deref for HalfingPipelineLayout {
-    type Target = wgpu::PipelineLayout;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+use crate::instruments::bind::storage::{SimpleStorageTexture, StorageSrcDstLayout};
 
 pub struct HalfingPipeline(wgpu::ComputePipeline);
 
@@ -101,5 +77,28 @@ impl HalfingPipeline {
         pass.set_pipeline(&self.0);
         pass.set_bind_group(0, &texture_bind_group, &[]);
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+    }
+}
+
+pub struct HalfingPipelineLayout(wgpu::PipelineLayout);
+
+impl HalfingPipelineLayout {
+    pub fn new(ctx: &GpuContext, storage: &StorageSrcDstLayout, label: Option<&str>) -> Self {
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label,
+                bind_group_layouts: &[storage],
+                push_constant_ranges: &[],
+            });
+        Self(layout)
+    }
+}
+
+impl std::ops::Deref for HalfingPipelineLayout {
+    type Target = wgpu::PipelineLayout;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

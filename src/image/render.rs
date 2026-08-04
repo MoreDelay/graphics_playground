@@ -4,7 +4,11 @@ use iced::wgpu;
 
 use crate::image::{DrawParameters, ImageLoaded};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
-use crate::instruments::bind::storage::{SimpleStorageTexture, StorageTextureCopyMachine};
+use crate::instruments::bind::storage::{
+    SimpleStorageTexture,
+    StorageSrcDstLayout,
+    StorageTextureCopyMachine,
+};
 use crate::instruments::bind::texture::{SimpleTexture, SimpleTextureLayout};
 use crate::instruments::buffer::{SimpleBuffer, SimpleBufferBind, SimpleBufferBindLayout};
 use crate::instruments::pipeline::filter::{
@@ -12,7 +16,6 @@ use crate::instruments::pipeline::filter::{
     ConvolutionPipelineLayout,
     KernelBinding,
     KernelLayout,
-    StorageSrcDstLayout,
 };
 use crate::instruments::pipeline::image::{
     LanczosImageRenderPipelineLayout,

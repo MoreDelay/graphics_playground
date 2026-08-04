@@ -67,6 +67,49 @@ impl std::ops::Deref for SimpleStorageTexture {
     }
 }
 
+pub struct StorageSrcDstLayout(wgpu::BindGroupLayout);
+
+impl StorageSrcDstLayout {
+    pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
+        let bind = ctx
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::ReadOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        Self(bind)
+    }
+}
+
+impl std::ops::Deref for StorageSrcDstLayout {
+    type Target = wgpu::BindGroupLayout;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub struct StorageTextureCopyMachine {
     texture_layout: wgpu::BindGroupLayout,
     texture_to_storage: wgpu::RenderPipeline,

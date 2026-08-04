@@ -4,13 +4,16 @@ use iced::wgpu;
 
 use crate::image::filters::GaussFilter;
 use crate::instruments::GpuContext;
-use crate::instruments::bind::storage::{SimpleStorageTexture, StorageTextureCopyMachine};
+use crate::instruments::bind::storage::{
+    SimpleStorageTexture,
+    StorageSrcDstLayout,
+    StorageTextureCopyMachine,
+};
 use crate::instruments::pipeline::filter::{
     ConvolutionPipeline,
     ConvolutionPipelineLayout,
     KernelBinding,
     KernelLayout,
-    StorageSrcDstLayout,
 };
 use crate::instruments::pipeline::halfing::{HalfingPipeline, HalfingPipelineLayout};
 

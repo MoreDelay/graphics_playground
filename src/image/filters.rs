@@ -11,7 +11,6 @@ impl GaussFilter {
             return None;
         }
 
-        #[expect(clippy::cast_possible_truncation)]
         let radius = (3. * sigma).ceil() as usize;
         let radius = NonZeroUsize::new(radius)?;
         Some(Self { sigma, radius })
@@ -23,7 +22,6 @@ impl GaussFilter {
 
         let mut kernel = vec![0.; radius + 1 + radius];
         for (i, k) in kernel.iter_mut().enumerate() {
-            #[expect(clippy::cast_precision_loss)]
             let t = i as f32 - radius as f32;
             let factor = 1. / ((2. * std::f32::consts::PI).sqrt() * sigma);
             let exponent = (-t * t) / (2. * sigma * sigma);

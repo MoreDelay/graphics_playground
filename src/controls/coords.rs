@@ -86,7 +86,6 @@ impl LocalCoords {
 
     const fn offset(&self) -> LocalVector {
         let bounds = self.bounds;
-        #[expect(clippy::cast_precision_loss)]
         let offset = na::Vector2::new(bounds.left as f32, bounds.top as f32);
         LocalVector::wrap(offset)
     }

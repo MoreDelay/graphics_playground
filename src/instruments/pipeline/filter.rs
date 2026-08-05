@@ -183,7 +183,6 @@ impl KernelBinding {
         let storage_texture = Self::create_kernel_texture(ctx, kernel);
         let view = storage_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        #[expect(clippy::cast_possible_truncation)]
         let kernel_size = kernel.len() as u32;
         let data = KernelInfoRaw {
             axis: 0,
@@ -246,7 +245,6 @@ impl KernelBinding {
         let n_kernel = kernel.len();
         let kernel = kernel.as_bytes();
 
-        #[expect(clippy::cast_possible_truncation)]
         let width = n_kernel as u32;
         let size = wgpu::Extent3d {
             width,

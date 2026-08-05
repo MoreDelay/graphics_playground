@@ -308,7 +308,6 @@ where
         let rect = PhysicalInsets {
             top: 0.,
             left: OFFSET - WIDTH / 2.,
-            #[expect(clippy::cast_precision_loss)]
             bottom: coords.size().height as f32,
             right: OFFSET + WIDTH / 2.,
         };

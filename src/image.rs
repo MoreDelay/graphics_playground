@@ -211,17 +211,13 @@ impl ImageWidget {
             .map(ImageLoaded::size)
             .unwrap_or_default();
 
-        #[expect(clippy::cast_precision_loss)]
         let width = viewport.width as f32;
-        #[expect(clippy::cast_precision_loss)]
         let height = viewport.height as f32;
 
-        #[expect(clippy::cast_precision_loss)]
         let x_min = width.mul_add(FILLED_PERCENT, -self.params.zoom * size.width as f32);
         let x_max = width * (1. - FILLED_PERCENT);
         let x = self.params.offset.x.clamp(x_min, x_max);
 
-        #[expect(clippy::cast_precision_loss)]
         let y_min = height.mul_add(FILLED_PERCENT, -self.params.zoom * size.height as f32);
         let y_max = height * (1. - FILLED_PERCENT);
         let y = self.params.offset.y.clamp(y_min, y_max);

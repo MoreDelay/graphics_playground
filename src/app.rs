@@ -84,7 +84,6 @@ impl winit::application::ApplicationHandler for Runner {
         }
 
         // Map window event to iced event
-        #[expect(clippy::cast_possible_truncation)]
         let scale_factor = ready.target_ctx.window.scale_factor() as f32;
         {
             if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
@@ -221,7 +220,6 @@ impl Ready {
         let controls = Controls::new(&gpu_ctx, &target_ctx);
 
         // Initialize iced
-        #[expect(clippy::cast_possible_truncation)]
         let scale_factor = window.scale_factor() as f32;
         let viewport = Viewport::with_physical_size(
             iced::Size::new(physical_size.width, physical_size.height),
@@ -271,7 +269,6 @@ impl Ready {
             self.resized = false;
         }
 
-        #[expect(clippy::cast_possible_truncation)]
         let scale_factor = self.target_ctx.window.scale_factor() as f32;
         let frame = match self.target_ctx.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -359,7 +356,6 @@ impl Ready {
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
 
-        #[expect(clippy::cast_possible_truncation)]
         let scale_factor = self.target_ctx.window.scale_factor() as f32;
         self.viewport = Viewport::with_physical_size(iced::Size::new(width, height), scale_factor);
 
@@ -373,7 +369,6 @@ impl Ready {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        #[expect(clippy::cast_possible_truncation)]
         let after = cursor_position(position, self.target_ctx.window.scale_factor() as f32);
         let cursor = Cursor::Available(after);
         let before = std::mem::replace(&mut self.cursor, cursor);

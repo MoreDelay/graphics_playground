@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
+use iced::Rectangle;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
@@ -8,10 +9,13 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
+use crate::controls::coords::LocalCoords;
 use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::scene::RenderWidget;
+
+pub mod coords;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -48,7 +52,7 @@ impl Controls {
         }
     }
 
-    pub fn view(&self, scale_factor: f64) -> Element<'_, Message, Theme, Renderer> {
+    pub fn view(&self, scale_factor: f32) -> Element<'_, Message, Theme, Renderer> {
         use iced::Length::{Fill, Shrink};
 
         self.scene_bounds.set(None);
@@ -95,10 +99,10 @@ impl Controls {
             iced::mouse::Cursor::Levitating(point) => Some(point),
             iced::mouse::Cursor::Unavailable => None,
         };
-        let cursor = cursor.map(|cursor| self.viewport.to_vp_point(cursor));
+        let cursor = cursor.and_then(|cursor| self.viewport.coords().local_point(cursor));
 
         match (&mut self.scene, message) {
-            (_, Message::SetScaleFactor(factor)) => self.viewport.set_scale_factor(factor),
+            (_, Message::SetScaleFactor(factor)) => self.viewport.update_scale_factor(factor),
 
             (CurrentScene::Scene(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
@@ -128,7 +132,7 @@ impl Controls {
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Drag(offset)) => {
-                let offset = self.viewport.to_vp_vector(offset);
+                let offset = self.viewport.coords().local_vector(offset);
                 let message = ImageMessage::Pan { offset };
                 widget.update(message);
             }
@@ -160,7 +164,7 @@ impl Controls {
             return;
         };
 
-        let new_size = self.viewport.resize(bounds);
+        let new_size = self.viewport.update_bounds(bounds);
         if new_size {
             let size = self.viewport.size();
             match &mut self.scene {
@@ -237,7 +241,7 @@ impl CurrentScene {
 pub struct PlaceholderWidget<'a> {
     bounds: &'a Cell<Option<PhysicalInsets<u32>>>,
     bg_color: Color,
-    scale_factor: f64,
+    scale_factor: f32,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for PlaceholderWidget<'_>
@@ -268,6 +272,58 @@ where
         _viewport: &iced::Rectangle,
     ) {
         // Update bounds through the cell
+        let bounds = self.compute_bounds(layout);
+        self.bounds.set(Some(bounds));
+
+        // Draw the background
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: layout.bounds(),
+                ..Default::default()
+            },
+            self.bg_color,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        _tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        const OFFSET: f32 = 400.;
+        const WIDTH: f32 = 20.;
+
+        let mouse::Cursor::Available(point) = cursor else {
+            return mouse::Interaction::None;
+        };
+        let bounds = self.compute_bounds(layout);
+        let coords = LocalCoords::new(bounds, self.scale_factor);
+        let Some(local) = coords.local_point(point) else {
+            return mouse::Interaction::None;
+        };
+
+        let rect = PhysicalInsets {
+            top: 0.,
+            left: OFFSET - WIDTH / 2.,
+            #[expect(clippy::cast_precision_loss)]
+            bottom: coords.size().height as f32,
+            right: OFFSET + WIDTH / 2.,
+        };
+        let inside = (rect.left <= local.x && local.x <= rect.right - 1.)
+            && (rect.top <= local.y && local.y <= rect.bottom - 1.);
+        if inside {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::None
+        }
+    }
+}
+
+impl PlaceholderWidget<'_> {
+    fn compute_bounds(&self, layout: Layout<'_>) -> PhysicalInsets<u32> {
         let bounds = layout.bounds();
         let inset = LogicalInsets {
             top: bounds.y,
@@ -275,15 +331,6 @@ where
             bottom: bounds.y + bounds.height,
             right: bounds.x + bounds.width,
         };
-        self.bounds.set(Some(inset.to_physical(self.scale_factor)));
-
-        // Draw the background
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds,
-                ..Default::default()
-            },
-            self.bg_color,
-        );
+        inset.to_physical(self.scale_factor as f64)
     }
 }

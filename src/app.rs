@@ -84,10 +84,9 @@ impl winit::application::ApplicationHandler for Runner {
         }
 
         // Map window event to iced event
-        let scale_factor = ready.target_ctx.window.scale_factor();
+        #[expect(clippy::cast_possible_truncation)]
+        let scale_factor = ready.target_ctx.window.scale_factor() as f32;
         {
-            #[expect(clippy::cast_possible_truncation)]
-            let scale_factor = scale_factor as f32;
             if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
                 ready.events.push(event);
             }
@@ -272,7 +271,8 @@ impl Ready {
             self.resized = false;
         }
 
-        let scale_factor = self.target_ctx.window.scale_factor();
+        #[expect(clippy::cast_possible_truncation)]
+        let scale_factor = self.target_ctx.window.scale_factor() as f32;
         let frame = match self.target_ctx.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(error) => {

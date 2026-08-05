@@ -8,13 +8,14 @@ use iced_wgpu::core::SmolStr;
 use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
+use crate::controls::coords::{LocalPoint, LocalVector};
 use crate::image::filters::GaussFilter;
 use crate::image::render::ImageInstruments;
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
 use crate::instruments::mipmap::MipMapper;
 use crate::instruments::pipeline::ImageFilter;
 use crate::instruments::pipeline::passthru::PassThruTexture;
-use crate::instruments::viewport::{VPPoint, VPVector, Viewport};
+use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
 pub struct ImageWidget {
@@ -67,15 +68,15 @@ impl ImageWidget {
             ImageMessage::ResizedViewport { size } => self.resize_viewport(size),
             ImageMessage::Pan { offset } => self.pan(offset),
             ImageMessage::SetZoom { zoom, cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
+                let fixed_point = cursor.unwrap_or_else(|| LocalPoint::wrap(na::Point2::origin()));
                 self.set_zoom(zoom, fixed_point);
             }
             ImageMessage::ZoomIn { cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
+                let fixed_point = cursor.unwrap_or_else(|| LocalPoint::wrap(na::Point2::origin()));
                 self.zoom_in(fixed_point);
             }
             ImageMessage::ZoomOut { cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| VPPoint::wrap(na::Point2::origin()));
+                let fixed_point = cursor.unwrap_or_else(|| LocalPoint::wrap(na::Point2::origin()));
                 self.zoom_out(fixed_point);
             }
             ImageMessage::ResetPosition => self.reset_pos(),
@@ -139,22 +140,22 @@ impl ImageWidget {
         self.image = Some(image);
     }
 
-    fn resize_viewport(&mut self, size: Option<PhysicalSize<u32>>) {
+    fn resize_viewport(&mut self, size: PhysicalSize<u32>) {
         self.instruments.resized();
-        self.params.viewport = size.unwrap_or_default();
+        self.params.viewport = size;
     }
 
-    fn zoom_in(&mut self, fix_point: VPPoint) {
+    fn zoom_in(&mut self, fix_point: LocalPoint) {
         let zoom = self.params.zoom * Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
     }
 
-    fn zoom_out(&mut self, fix_point: VPPoint) {
+    fn zoom_out(&mut self, fix_point: LocalPoint) {
         let zoom = self.params.zoom / Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
     }
 
-    fn set_zoom(&mut self, zoom: f32, fix_point: VPPoint) {
+    fn set_zoom(&mut self, zoom: f32, fix_point: LocalPoint) {
         self.instruments.zoomed();
 
         let zoom = zoom.clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
@@ -177,7 +178,7 @@ impl ImageWidget {
         self.clamp_offset();
     }
 
-    fn pan(&mut self, offset: VPVector) {
+    fn pan(&mut self, offset: LocalVector) {
         self.instruments.panned();
         self.params.offset += *offset;
         self.clamp_offset();
@@ -231,18 +232,31 @@ impl ImageWidget {
 
 #[derive(Debug, Clone)]
 pub enum ImageMessage {
-    SetImage { image: ImageLoaded },
-    ResizedViewport { size: Option<PhysicalSize<u32>> },
-    Pan { offset: VPVector },
-    SetZoom { cursor: Option<VPPoint>, zoom: f32 },
-    ZoomIn { cursor: Option<VPPoint> },
-    ZoomOut { cursor: Option<VPPoint> },
+    SetImage {
+        image: ImageLoaded,
+    },
+    ResizedViewport {
+        size: PhysicalSize<u32>,
+    },
+    Pan {
+        offset: LocalVector,
+    },
+    SetZoom {
+        cursor: Option<LocalPoint>,
+        zoom: f32,
+    },
+    ZoomIn {
+        cursor: Option<LocalPoint>,
+    },
+    ZoomOut {
+        cursor: Option<LocalPoint>,
+    },
     ResetPosition,
     CycleFilters,
 }
 
 impl ImageMessage {
-    pub fn from_key(key: &SmolStr, cursor: Option<VPPoint>) -> Option<Self> {
+    pub fn from_key(key: &SmolStr, cursor: Option<LocalPoint>) -> Option<Self> {
         match key.as_str() {
             "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
             "2" => Some(Self::SetZoom { cursor, zoom: 2. }),

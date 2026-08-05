@@ -12,6 +12,9 @@ pub struct ImageMetadataRaw {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LanczosInfoRaw {
-    /// Size of windowing function, typically 2 or 3
+    /// Size of windowing function, typically integer values and either 2 or 3
+    ///
+    /// This also determines the number of lobes included, where we have a total of $2 a - 1$ lobes
+    /// with $a$ being the filter size.
     pub filter_size: f32,
 }

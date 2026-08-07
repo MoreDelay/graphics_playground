@@ -19,7 +19,7 @@ use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
 pub struct ImageWidget {
-    image: Option<ImageLoaded>,
+    image: Option<ImageMemory>,
 
     instruments: ImageInstruments,
 
@@ -135,7 +135,7 @@ impl ImageWidget {
             .lanczos(image, ctx, target, encoder, viewport, params);
     }
 
-    fn set_image(&mut self, image: ImageLoaded) {
+    fn set_image(&mut self, image: ImageMemory) {
         self.instruments.replaced_image();
         self.image = Some(image);
     }
@@ -208,7 +208,7 @@ impl ImageWidget {
         let size = self
             .image
             .as_ref()
-            .map(ImageLoaded::size)
+            .map(ImageMemory::size)
             .unwrap_or_default();
 
         let width = viewport.width as f32;
@@ -229,7 +229,7 @@ impl ImageWidget {
 #[derive(Debug, Clone)]
 pub enum ImageMessage {
     SetImage {
-        image: ImageLoaded,
+        image: ImageMemory,
     },
     ResizedViewport {
         size: PhysicalSize<u32>,
@@ -267,12 +267,12 @@ impl ImageMessage {
 }
 
 #[derive(Debug, Clone)]
-pub struct ImageLoaded {
+pub struct ImageMemory {
     image: image::RgbaImage,
     format: wgpu::TextureFormat,
 }
 
-impl ImageLoaded {
+impl ImageMemory {
     pub const FORMAT_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     pub fn load(path: &Path) -> Result<Self, image::ImageError> {
@@ -355,7 +355,7 @@ impl ImageLoaded {
     }
 }
 
-impl std::ops::Deref for ImageLoaded {
+impl std::ops::Deref for ImageMemory {
     type Target = image::RgbaImage;
 
     fn deref(&self) -> &Self::Target {

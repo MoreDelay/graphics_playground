@@ -10,7 +10,7 @@ use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
 use crate::controls::coords::LocalCoords;
-use crate::image::{ImageLoaded, ImageMessage, ImageWidget};
+use crate::image::{ImageMemory, ImageMessage, ImageWidget};
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::scene::RenderWidget;
@@ -119,9 +119,12 @@ impl Controls {
             (CurrentScene::Image(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::scene(ctx, target);
             }
-            (CurrentScene::Image(_), Message::SelectFile) => {
+            (CurrentScene::Image(widget), Message::SelectFile) => {
                 self.image = Self::pick_image_dialog();
-                self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
+                if let Some(image) = self.image.as_deref().and_then(load_image) {
+                    let msg = ImageMessage::SetImage { image };
+                    widget.update(msg);
+                }
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
                 let message = ImageMessage::ZoomIn { cursor };
@@ -199,6 +202,7 @@ impl Controls {
 
     fn pick_image_dialog() -> Option<PathBuf> {
         rfd::FileDialog::new()
+            .set_title("Pick image to display")
             .add_filter("image", &["jpg", "jpeg", "png", "avif", "webp", "jxl"])
             .pick_file()
     }
@@ -223,14 +227,9 @@ impl CurrentScene {
         let msg = ImageMessage::ResizedViewport { size };
         widget.update(msg);
 
-        if let Some(path) = path {
-            match ImageLoaded::load(path) {
-                Ok(image) => {
-                    let msg = ImageMessage::SetImage { image };
-                    widget.update(msg);
-                }
-                Err(err) => eprintln!("could not load image: {err}"),
-            }
+        if let Some(image) = path.and_then(load_image) {
+            let msg = ImageMessage::SetImage { image };
+            widget.update(msg);
         }
 
         Self::Image(widget)
@@ -332,4 +331,14 @@ impl PlaceholderWidget<'_> {
         };
         inset.to_physical(self.scale_factor as f64)
     }
+}
+
+fn load_image(path: &Path) -> Option<ImageMemory> {
+    match ImageMemory::load(path) {
+        Ok(image) => return Some(image),
+        Err(err) => {
+            eprintln!("Could not load image: {err}");
+        }
+    }
+    None
 }

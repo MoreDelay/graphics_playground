@@ -2,27 +2,19 @@ use std::range::Range;
 
 use iced::wgpu;
 
-use crate::image::{DrawParameters, ImageLoaded};
+use crate::image::{DrawParameters, ImageMemory};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
 use crate::instruments::bind::storage::{
-    SimpleStorageTexture,
-    StorageSrcDstLayout,
-    StorageTextureCopyMachine,
+    SimpleStorageTexture, StorageSrcDstLayout, StorageTextureCopyMachine,
 };
 use crate::instruments::bind::texture::{SimpleTexture, SimpleTextureLayout};
 use crate::instruments::buffer::{SimpleBuffer, SimpleBufferBind, SimpleBufferBindLayout};
 use crate::instruments::pipeline::filter::{
-    ConvolutionPipeline,
-    ConvolutionPipelineLayout,
-    KernelBinding,
-    KernelLayout,
+    ConvolutionPipeline, ConvolutionPipelineLayout, KernelBinding, KernelLayout,
 };
 use crate::instruments::pipeline::image::{
-    LanczosImageRenderPipelineLayout,
-    RenderBilinearPipeline,
-    RenderLanczosPipeline,
-    RenderNearestPipeline,
-    SimpleImageRenderPipelineLayout,
+    LanczosImageRenderPipelineLayout, RenderBilinearPipeline, RenderLanczosPipeline,
+    RenderNearestPipeline, SimpleImageRenderPipelineLayout,
 };
 use crate::instruments::pipeline::passthru::PassThruTexture;
 use crate::instruments::viewport::Viewport;
@@ -65,7 +57,7 @@ impl ImageInstruments {
 
     pub fn nearest(
         &mut self,
-        image: &ImageLoaded,
+        image: &ImageMemory,
         ctx: &GpuContext,
         target: &TargetContext,
         encoder: &mut wgpu::CommandEncoder,
@@ -107,7 +99,7 @@ impl ImageInstruments {
 
     pub fn bilinear(
         &mut self,
-        image: &ImageLoaded,
+        image: &ImageMemory,
         ctx: &GpuContext,
         target: &TargetContext,
         encoder: &mut wgpu::CommandEncoder,
@@ -149,7 +141,7 @@ impl ImageInstruments {
 
     pub fn lanczos(
         &mut self,
-        image: &ImageLoaded,
+        image: &ImageMemory,
         ctx: &GpuContext,
         target: &TargetContext,
         encoder: &mut wgpu::CommandEncoder,
@@ -312,7 +304,7 @@ impl ImageInstruments {
         }
     }
 
-    fn create_original(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+    fn create_original(&mut self, ctx: &GpuContext, image: &ImageMemory) {
         if self.original.checked() {
             return;
         }
@@ -403,7 +395,7 @@ impl ImageInstruments {
         self.convolution_pipeline = Use::Active(convolution);
     }
 
-    fn create_copy_machine(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+    fn create_copy_machine(&mut self, ctx: &GpuContext, image: &ImageMemory) {
         if self.copy_machine.checked() {
             return;
         }
@@ -415,7 +407,7 @@ impl ImageInstruments {
         self.copy_machine = Use::Active(copy_machine);
     }
 
-    fn create_storage_data(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+    fn create_storage_data(&mut self, ctx: &GpuContext, image: &ImageMemory) {
         if self.storage_data.checked() {
             return;
         }
@@ -431,7 +423,7 @@ impl ImageInstruments {
         self.storage_data = Use::Active(storage);
     }
 
-    fn create_storage_scratch(&mut self, ctx: &GpuContext, image: &ImageLoaded) {
+    fn create_storage_scratch(&mut self, ctx: &GpuContext, image: &ImageMemory) {
         if self.storage_scratch.checked() {
             return;
         }
@@ -517,7 +509,7 @@ impl ImageInstruments {
         &mut self,
         ctx: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
-        image: &ImageLoaded,
+        image: &ImageMemory,
         params: &DrawParameters,
     ) {
         self.create_kernel_bind(ctx, params);

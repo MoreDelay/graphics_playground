@@ -10,7 +10,7 @@ use nalgebra as na;
 
 use crate::controls::coords::{LocalPoint, LocalVector};
 use crate::image::filters::GaussFilter;
-use crate::image::render::ImageInstruments;
+use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
 use crate::instruments::mipmap::MipMapper;
 use crate::instruments::pipeline::ImageFilter;
@@ -21,7 +21,9 @@ use crate::instruments::{GpuContext, TargetContext};
 pub struct ImageWidget {
     image: Option<ImageMemory>,
 
-    instruments: ImageInstruments,
+    meta: ImageMetaInstruments,
+    left: ImageDataInstruments,
+    right: ImageDataInstruments,
 
     // persistent state
     params: DrawParameters,
@@ -35,7 +37,9 @@ impl ImageWidget {
     pub fn new() -> Self {
         Self {
             image: None,
-            instruments: ImageInstruments::new(),
+            meta: ImageMetaInstruments::new(),
+            left: ImageDataInstruments::new(),
+            right: ImageDataInstruments::new(),
             params: DrawParameters::default(),
         }
     }
@@ -47,8 +51,8 @@ impl ImageWidget {
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
     ) -> Option<&PassThruTexture> {
-        if self.instruments.output().is_some() {
-            return self.instruments.output();
+        if self.left.output().is_some() {
+            return self.left.output();
         }
 
         let params = self.params;
@@ -59,10 +63,11 @@ impl ImageWidget {
             ImageFilter::Lanczos => self.lanczos(ctx, target, encoder, viewport, &params),
         }
 
-        self.instruments.output()
+        self.left.output()
     }
 
     pub fn update(&mut self, message: ImageMessage) {
+        dbg!(&message);
         match message {
             ImageMessage::SetImage { image } => self.set_image(image),
             ImageMessage::ResizedViewport { size } => self.resize_viewport(size),
@@ -96,9 +101,19 @@ impl ImageWidget {
             return;
         };
 
-        self.instruments.uncheck_all();
-        self.instruments
-            .nearest(image, ctx, target, encoder, viewport, params);
+        self.meta.uncheck_all();
+        self.left.uncheck_all();
+        self.right.uncheck_all();
+
+        self.meta.nearest(
+            &mut self.left,
+            ctx,
+            target,
+            encoder,
+            viewport,
+            image,
+            params,
+        );
     }
 
     fn bilinear(
@@ -113,9 +128,19 @@ impl ImageWidget {
             return;
         };
 
-        self.instruments.uncheck_all();
-        self.instruments
-            .bilinear(image, ctx, target, encoder, viewport, params);
+        self.meta.uncheck_all();
+        self.left.uncheck_all();
+        self.right.uncheck_all();
+
+        self.meta.bilinear(
+            &mut self.left,
+            ctx,
+            target,
+            encoder,
+            viewport,
+            image,
+            params,
+        );
     }
 
     fn lanczos(
@@ -130,18 +155,40 @@ impl ImageWidget {
             return;
         };
 
-        self.instruments.uncheck_all();
-        self.instruments
-            .lanczos(image, ctx, target, encoder, viewport, params);
+        self.meta.uncheck_all();
+        self.left.uncheck_all();
+        self.right.uncheck_all();
+
+        self.meta.lanczos(
+            &mut self.left,
+            ctx,
+            target,
+            encoder,
+            viewport,
+            image,
+            params,
+        );
     }
 
     fn set_image(&mut self, image: ImageMemory) {
-        self.instruments.replaced_image();
+        self.meta.replaced_image();
+        self.left.replaced_image();
+        self.right.replaced_image();
+
         self.image = Some(image);
+
+        let default = DrawParameters::default();
+        self.params = DrawParameters {
+            offset: default.offset,
+            zoom: default.zoom,
+            ..self.params
+        };
     }
 
     fn resize_viewport(&mut self, size: PhysicalSize<u32>) {
-        self.instruments.resized();
+        self.left.resized();
+        self.right.resized();
+
         self.params.viewport = size;
     }
 
@@ -156,7 +203,9 @@ impl ImageWidget {
     }
 
     fn set_zoom(&mut self, zoom: f32, fix_point: LocalPoint) {
-        self.instruments.zoomed();
+        self.meta.zoomed();
+        self.left.zoomed();
+        self.right.zoomed();
 
         let zoom = zoom.clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
 
@@ -179,18 +228,27 @@ impl ImageWidget {
     }
 
     fn pan(&mut self, offset: LocalVector) {
-        self.instruments.panned();
+        self.meta.panned();
+        self.left.panned();
+        self.right.panned();
+
         self.params.offset += *offset;
         self.clamp_offset();
     }
 
     fn reset_pos(&mut self) {
-        self.instruments.panned();
+        self.meta.panned();
+        self.left.panned();
+        self.right.panned();
+
         self.params.offset = na::Vector2::zeros();
     }
 
     fn cycle_filters(&mut self) {
-        self.instruments.cycled_filter();
+        self.meta.cycled_filter();
+        self.left.cycled_filter();
+        self.right.cycled_filter();
+
         self.params.filter = match self.params.filter {
             ImageFilter::Nearest => ImageFilter::BiLinear,
             ImageFilter::BiLinear => ImageFilter::Lanczos,
@@ -226,7 +284,7 @@ impl ImageWidget {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ImageMessage {
     SetImage {
         image: ImageMemory,
@@ -249,6 +307,34 @@ pub enum ImageMessage {
     },
     ResetPosition,
     CycleFilters,
+}
+
+impl std::fmt::Debug for ImageMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SetImage { image } => f
+                .debug_struct("SetImage")
+                .field(
+                    "image",
+                    &format!("Image({}x{})", image.width(), image.height()),
+                )
+                .finish(),
+            Self::ResizedViewport { size } => f
+                .debug_struct("ResizedViewport")
+                .field("size", size)
+                .finish(),
+            Self::Pan { offset } => f.debug_struct("Pan").field("offset", offset).finish(),
+            Self::SetZoom { cursor, zoom } => f
+                .debug_struct("SetZoom")
+                .field("cursor", cursor)
+                .field("zoom", zoom)
+                .finish(),
+            Self::ZoomIn { cursor } => f.debug_struct("ZoomIn").field("cursor", cursor).finish(),
+            Self::ZoomOut { cursor } => f.debug_struct("ZoomOut").field("cursor", cursor).finish(),
+            Self::ResetPosition => write!(f, "ResetPosition"),
+            Self::CycleFilters => write!(f, "CycleFilters"),
+        }
+    }
 }
 
 impl ImageMessage {

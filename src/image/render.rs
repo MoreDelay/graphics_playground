@@ -29,21 +29,12 @@ use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
 #[derive(Default)]
-pub struct ImageInstruments {
-    output: Use<PassThruTexture>,
-    original: Use<SimpleTexture>,
-    params: Use<DrawParameters>,
-
+pub struct ImageMetaInstruments {
     storage_layout: Use<StorageSrcDstLayout>,
     kernel_layout: Use<KernelLayout>,
     convolution_layout: Use<ConvolutionPipelineLayout>,
     convolution_pipeline: Use<ConvolutionPipeline>,
-
     copy_machine: Use<StorageTextureCopyMachine>,
-    storage_data: Use<SimpleStorageTexture>,
-    storage_scratch: Use<SimpleStorageTexture>,
-    kernel_bind: Use<KernelBinding>,
-    blurred: Use<SimpleTexture>,
 
     texture_layout: Use<SimpleTextureLayout>,
     buffer_layout: Use<SimpleBufferBindLayout>,
@@ -58,29 +49,32 @@ pub struct ImageInstruments {
     lanczos_buffer: Use<SimpleBufferBind<LanczosInfoRaw>>,
 }
 
-impl ImageInstruments {
+/// Public API
+impl ImageMetaInstruments {
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn nearest(
         &mut self,
-        image: &ImageMemory,
+        data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         target: &TargetContext,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
+        image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        let Some(output) = self.create_output(ctx, viewport) else {
+        let Some(output) = data.create_output(ctx, viewport) else {
             return;
         };
 
-        self.create_original(ctx, image);
+        self.create_original(data, ctx, image);
         self.create_meta_buffer(ctx, params);
         self.create_nearest_pipeline(ctx, target);
 
-        let original = self.original.active();
+        let original = data.original.active();
         let meta_buffer = self.meta_buffer.active();
         let pipeline = self.nearest_pipeline.active();
 
@@ -102,28 +96,30 @@ impl ImageInstruments {
 
         pipeline.draw(&mut pass, original, meta_buffer);
 
-        self.output = Use::Active(output);
+        data.output = Use::Active(output);
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn bilinear(
         &mut self,
-        image: &ImageMemory,
+        data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         target: &TargetContext,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
+        image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        let Some(output) = self.create_output(ctx, viewport) else {
+        let Some(output) = data.create_output(ctx, viewport) else {
             return;
         };
 
         self.create_meta_buffer(ctx, params);
-        self.create_original(ctx, image);
+        self.create_original(data, ctx, image);
         self.create_bilinear_pipeline(ctx, target);
 
         let meta_buffer = self.meta_buffer.active();
-        let original = self.original.active();
+        let original = data.original.active();
         let pipeline = self.bilinear_pipeline.active();
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -144,33 +140,35 @@ impl ImageInstruments {
 
         pipeline.draw(&mut pass, original, meta_buffer);
 
-        self.output = Use::Active(output);
+        data.output = Use::Active(output);
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn lanczos(
         &mut self,
-        image: &ImageMemory,
+        data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         target: &TargetContext,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
+        image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        let Some(output) = self.create_output(ctx, viewport) else {
+        let Some(output) = data.create_output(ctx, viewport) else {
             return;
         };
 
         // Interpolate with Lanczos filter
-        self.create_blurred(ctx, encoder, image, params);
+        self.create_blurred(data, ctx, encoder, image, params);
         self.create_lanczos_pipeline(ctx, target);
         self.create_meta_buffer(ctx, params);
         self.create_lanczos_buffer(ctx, params);
 
-        let blurred = if let Some(blurred) = &self.blurred.maybe_active() {
+        let blurred = if let Some(blurred) = &data.blurred.maybe_active() {
             blurred
         } else {
-            self.create_original(ctx, image);
-            self.original.active()
+            self.create_original(data, ctx, image);
+            data.original.active()
         };
 
         let pipeline = self.lanczos_pipeline.active();
@@ -195,40 +193,12 @@ impl ImageInstruments {
 
         pipeline.draw(&mut pass, blurred, meta_buffer, lanczos_buffer);
 
-        self.output = Use::Active(output);
-    }
-
-    pub fn uncheck_all(&mut self) {
-        self.output.uncheck();
-        self.original.uncheck();
-        self.params.uncheck();
-
-        self.storage_layout.uncheck();
-        self.kernel_layout.uncheck();
-        self.convolution_layout.uncheck();
-        self.convolution_pipeline.uncheck();
-
-        self.copy_machine.uncheck();
-        self.storage_data.uncheck();
-        self.storage_scratch.uncheck();
-        self.kernel_bind.uncheck();
-        self.blurred.uncheck();
-
-        self.texture_layout.uncheck();
-        self.buffer_layout.uncheck();
-
-        self.simple_pipeline_layout.uncheck();
-        self.lanczos_pipeline_layout.uncheck();
-        self.nearest_pipeline.uncheck();
-        self.bilinear_pipeline.uncheck();
-        self.lanczos_pipeline.uncheck();
-
-        self.meta_buffer.uncheck();
-        self.lanczos_buffer.uncheck();
+        data.output = Use::Active(output);
     }
 }
 
-impl ImageInstruments {
+/// Instrumentalization
+impl ImageMetaInstruments {
     fn create_texture_layout(&mut self, ctx: &GpuContext) {
         if self.texture_layout.checked() {
             return;
@@ -312,8 +282,13 @@ impl ImageInstruments {
         }
     }
 
-    fn create_original(&mut self, ctx: &GpuContext, image: &ImageMemory) {
-        if self.original.checked() {
+    fn create_original(
+        &mut self,
+        data: &mut ImageDataInstruments,
+        ctx: &GpuContext,
+        image: &ImageMemory,
+    ) {
+        if data.original.checked() {
             return;
         }
 
@@ -326,7 +301,7 @@ impl ImageInstruments {
             texture,
             Some("Image Original Texture Bind"),
         );
-        self.original = Use::Active(original);
+        data.original = Use::Active(original);
     }
 
     fn create_kernel_layout(&mut self, ctx: &GpuContext) {
@@ -337,12 +312,17 @@ impl ImageInstruments {
         self.kernel_layout = Use::Active(KernelLayout::new(ctx, Some("Image Kernel Layout")));
     }
 
-    fn create_kernel_bind(&mut self, ctx: &GpuContext, params: &DrawParameters) {
-        if self.kernel_bind.checked() {
+    fn create_kernel_bind(
+        &mut self,
+        data: &mut ImageDataInstruments,
+        ctx: &GpuContext,
+        params: &DrawParameters,
+    ) {
+        if data.kernel_bind.checked() {
             return;
         }
 
-        self.kernel_bind = match params.raw_blur_kernel() {
+        data.kernel_bind = match params.raw_blur_kernel() {
             Some(kernel) => {
                 self.create_kernel_layout(ctx);
                 let layout = self.kernel_layout.active();
@@ -403,48 +383,63 @@ impl ImageInstruments {
         self.convolution_pipeline = Use::Active(convolution);
     }
 
-    fn create_copy_machine(&mut self, ctx: &GpuContext, image: &ImageMemory) {
+    fn create_copy_machine(
+        &mut self,
+        data: &mut ImageDataInstruments,
+        ctx: &GpuContext,
+        image: &ImageMemory,
+    ) {
         if self.copy_machine.checked() {
             return;
         }
 
-        self.create_original(ctx, image);
-        let format = self.original.active().texture().format();
+        self.create_original(data, ctx, image);
+        let format = data.original.active().texture().format();
 
         let copy_machine = StorageTextureCopyMachine::new(ctx, format);
         self.copy_machine = Use::Active(copy_machine);
     }
 
-    fn create_storage_data(&mut self, ctx: &GpuContext, image: &ImageMemory) {
-        if self.storage_data.checked() {
+    fn create_storage_data(
+        &mut self,
+        data: &mut ImageDataInstruments,
+        ctx: &GpuContext,
+        image: &ImageMemory,
+    ) {
+        if data.storage_data.checked() {
             return;
         }
 
-        self.create_original(ctx, image);
-        let original = self.original.active();
+        self.create_original(data, ctx, image);
+        let original = data.original.active();
 
         let storage = SimpleStorageTexture::empty(
             ctx,
             original.texture(),
             Some("Image Data Storage Texture"),
         );
-        self.storage_data = Use::Active(storage);
+        data.storage_data = Use::Active(storage);
     }
 
-    fn create_storage_scratch(&mut self, ctx: &GpuContext, image: &ImageMemory) {
-        if self.storage_scratch.checked() {
+    fn create_storage_scratch(
+        &mut self,
+        data: &mut ImageDataInstruments,
+        ctx: &GpuContext,
+        image: &ImageMemory,
+    ) {
+        if data.storage_scratch.checked() {
             return;
         }
 
-        self.create_original(ctx, image);
-        let original = self.original.active();
+        self.create_original(data, ctx, image);
+        let original = data.original.active();
 
         let storage = SimpleStorageTexture::empty(
             ctx,
             original.texture(),
             Some("Image Scratch Storage Texture"),
         );
-        self.storage_scratch = Use::Active(storage);
+        data.storage_scratch = Use::Active(storage);
     }
 
     fn create_lanczos_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
@@ -495,49 +490,32 @@ impl ImageInstruments {
         self.lanczos_pipeline = Use::Active(pipeline);
     }
 
-    fn create_output(&mut self, ctx: &GpuContext, viewport: &Viewport) -> Option<PassThruTexture> {
-        let Some(extend) = viewport.extent() else {
-            self.output = self.output.take().make_unused();
-            return None;
-        };
-
-        match self.output.take() {
-            checked @ (Use::Active(_) | Use::Invalid) => {
-                self.output = checked;
-                None
-            }
-            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extend => {
-                Some(output)
-            }
-            Use::Recycle(_) | Use::Unused(_) | Use::Missing => viewport.create_texture(ctx),
-        }
-    }
-
     fn create_blurred(
         &mut self,
+        data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
         image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        self.create_kernel_bind(ctx, params);
+        self.create_kernel_bind(data, ctx, params);
 
-        if !matches!(&self.kernel_bind, Use::Active(_)) {
-            self.blurred = self.blurred.take().make_unused();
+        if !matches!(&data.kernel_bind, Use::Active(_)) {
+            data.blurred = data.blurred.take().make_unused();
             return;
         }
 
-        let blurred = match self.blurred.take() {
+        let blurred = match data.blurred.take() {
             checked @ (Use::Active(_) | Use::Invalid) => {
-                self.blurred = checked;
+                data.blurred = checked;
                 return;
             }
             Use::Recycle(t) | Use::Unused(t) if t.texture().size() == image.extent() => t,
             Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
                 self.create_texture_layout(ctx);
-                self.create_original(ctx, image);
+                self.create_original(data, ctx, image);
                 let texture = self.texture_layout.active();
-                let original = self.original.active();
+                let original = data.original.active();
 
                 SimpleTexture::empty(
                     ctx,
@@ -550,20 +528,20 @@ impl ImageInstruments {
         };
 
         self.create_convolution_pipeline(ctx);
-        self.create_copy_machine(ctx, image);
+        self.create_copy_machine(data, ctx, image);
         self.create_storage_layout(ctx);
-        self.create_storage_data(ctx, image);
-        self.create_storage_scratch(ctx, image);
-        self.create_original(ctx, image);
+        self.create_storage_data(data, ctx, image);
+        self.create_storage_scratch(data, ctx, image);
+        self.create_original(data, ctx, image);
 
         let convolution_pipeline = self.convolution_pipeline.active();
         let copy_machine = self.copy_machine.active();
         let storage_layout = self.storage_layout.active();
-        let storage_data = self.storage_data.active();
-        let storage_scratch = self.storage_scratch.active();
-        let original = self.original.active();
+        let storage_data = data.storage_data.active();
+        let storage_scratch = data.storage_scratch.active();
+        let original = data.original.active();
 
-        let kernel_bind = self.kernel_bind.active();
+        let kernel_bind = data.kernel_bind.active();
 
         storage_data.copy_from_texture(
             ctx,
@@ -598,11 +576,87 @@ impl ImageInstruments {
             Range::from(0..1),
         );
 
-        self.blurred = Use::Active(blurred);
+        data.blurred = Use::Active(blurred);
     }
 }
 
-impl ImageInstruments {
+/// Results and state changes
+impl ImageMetaInstruments {
+    #[expect(dead_code)]
+    pub fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+
+    pub fn uncheck_all(&mut self) {
+        self.storage_layout.uncheck();
+        self.kernel_layout.uncheck();
+        self.convolution_layout.uncheck();
+        self.convolution_pipeline.uncheck();
+        self.copy_machine.uncheck();
+
+        self.texture_layout.uncheck();
+        self.buffer_layout.uncheck();
+
+        self.simple_pipeline_layout.uncheck();
+        self.lanczos_pipeline_layout.uncheck();
+        self.nearest_pipeline.uncheck();
+        self.bilinear_pipeline.uncheck();
+        self.lanczos_pipeline.uncheck();
+
+        self.meta_buffer.uncheck();
+        self.lanczos_buffer.uncheck();
+    }
+
+    pub fn replaced_image(&mut self) {
+        self.meta_buffer.degrade();
+    }
+
+    pub fn zoomed(&mut self) {
+        self.meta_buffer.degrade();
+    }
+
+    pub fn panned(&mut self) {
+        self.meta_buffer.degrade();
+    }
+
+    pub fn cycled_filter(&mut self) {
+        self.storage_layout.discard();
+        self.kernel_layout.discard();
+        self.convolution_layout.discard();
+        self.convolution_pipeline.discard();
+        self.copy_machine.discard();
+
+        self.texture_layout.discard();
+        self.buffer_layout.discard();
+
+        self.simple_pipeline_layout.discard();
+        self.lanczos_pipeline_layout.discard();
+        self.nearest_pipeline.discard();
+        self.bilinear_pipeline.discard();
+        self.lanczos_pipeline.discard();
+
+        self.meta_buffer.keep();
+        self.lanczos_buffer.discard();
+    }
+}
+
+#[derive(Default)]
+pub struct ImageDataInstruments {
+    output: Use<PassThruTexture>,
+    original: Use<SimpleTexture>,
+    params: Use<DrawParameters>,
+
+    storage_data: Use<SimpleStorageTexture>,
+    storage_scratch: Use<SimpleStorageTexture>,
+    kernel_bind: Use<KernelBinding>,
+    blurred: Use<SimpleTexture>,
+}
+
+impl ImageDataInstruments {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub const fn output(&self) -> Option<&PassThruTexture> {
         let Use::Active(output) = &self.output else {
             return None;
@@ -610,9 +664,15 @@ impl ImageInstruments {
         Some(output)
     }
 
-    #[expect(dead_code)]
-    pub fn take(&mut self) -> Self {
-        std::mem::take(self)
+    pub fn uncheck_all(&mut self) {
+        self.output.uncheck();
+        self.original.uncheck();
+        self.params.uncheck();
+
+        self.storage_data.uncheck();
+        self.storage_scratch.uncheck();
+        self.kernel_bind.uncheck();
+        self.blurred.uncheck();
     }
 
     pub fn replaced_image(&mut self) {
@@ -633,12 +693,10 @@ impl ImageInstruments {
         self.output.degrade();
         self.blurred.discard();
         self.kernel_bind.discard();
-        self.meta_buffer.degrade();
     }
 
     pub fn panned(&mut self) {
         self.output.degrade();
-        self.meta_buffer.degrade();
     }
 
     pub fn cycled_filter(&mut self) {
@@ -646,28 +704,28 @@ impl ImageInstruments {
         self.original.keep();
         self.params.keep();
 
-        self.storage_layout.discard();
-        self.kernel_layout.discard();
-        self.convolution_layout.discard();
-        self.convolution_pipeline.discard();
-
-        self.copy_machine.discard();
         self.storage_data.discard();
         self.storage_scratch.discard();
         self.kernel_bind.discard();
         self.blurred.discard();
+    }
 
-        self.texture_layout.discard();
-        self.buffer_layout.discard();
+    fn create_output(&mut self, ctx: &GpuContext, viewport: &Viewport) -> Option<PassThruTexture> {
+        let Some(extend) = viewport.extent() else {
+            self.output = self.output.take().make_unused();
+            return None;
+        };
 
-        self.simple_pipeline_layout.discard();
-        self.lanczos_pipeline_layout.discard();
-        self.nearest_pipeline.discard();
-        self.bilinear_pipeline.discard();
-        self.lanczos_pipeline.discard();
-
-        self.meta_buffer.keep();
-        self.lanczos_buffer.discard();
+        match self.output.take() {
+            checked @ (Use::Active(_) | Use::Invalid) => {
+                self.output = checked;
+                None
+            }
+            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extend => {
+                Some(output)
+            }
+            Use::Recycle(_) | Use::Unused(_) | Use::Missing => viewport.create_texture(ctx),
+        }
     }
 }
 

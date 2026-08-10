@@ -14,19 +14,27 @@ use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
 use crate::instruments::mipmap::MipMapper;
 use crate::instruments::pipeline::ImageFilter;
-use crate::instruments::pipeline::passthru::PassThruTexture;
+use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
+use crate::instruments::splitview::draw_splitted;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
+#[derive(Debug, Default, Clone, Copy)]
+pub enum ComparisonSplit {
+    #[default]
+    FullLeft,
+    Split(u32),
+    FullRight,
+}
+
 pub struct ImageWidget {
-    image: Option<ImageMemory>,
-
     meta: ImageMetaInstruments,
-    left: ImageDataInstruments,
-    right: ImageDataInstruments,
 
-    // persistent state
+    left: Option<SingleImageState>,
+    right: Option<SingleImageState>,
+
     params: DrawParameters,
+    split: ComparisonSplit,
 }
 
 impl ImageWidget {
@@ -36,11 +44,11 @@ impl ImageWidget {
 
     pub fn new() -> Self {
         Self {
-            image: None,
             meta: ImageMetaInstruments::new(),
-            left: ImageDataInstruments::new(),
-            right: ImageDataInstruments::new(),
+            left: None,
+            right: None,
             params: DrawParameters::default(),
+            split: ComparisonSplit::default(),
         }
     }
 
@@ -48,26 +56,61 @@ impl ImageWidget {
         &mut self,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
     ) -> Option<&PassThruTexture> {
-        if self.left.output().is_some() {
-            return self.left.output();
+        if self.meta.final_output().is_some() {
+            return self.meta.final_output();
+        }
+
+        self.meta.uncheck_all();
+        if let Some(left) = &mut self.left {
+            left.instruments.uncheck_all();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.uncheck_all();
         }
 
         let params = self.params;
 
         match self.params.filter {
-            ImageFilter::Nearest => self.nearest(ctx, target, encoder, viewport, &params),
-            ImageFilter::BiLinear => self.bilinear(ctx, target, encoder, viewport, &params),
-            ImageFilter::Lanczos => self.lanczos(ctx, target, encoder, viewport, &params),
+            ImageFilter::Nearest => self.nearest(ctx, target, passthru, encoder, viewport, &params),
+            ImageFilter::BiLinear => {
+                self.bilinear(ctx, target, passthru, encoder, viewport, &params);
+            }
+            ImageFilter::Lanczos => self.lanczos(ctx, target, passthru, encoder, viewport, &params),
         }
 
-        self.left.output()
+        let output = self.meta.create_output(ctx, passthru, viewport)?;
+
+        match (&self.left, &self.right) {
+            (None, _) => return None,
+            (Some(left), None) => {
+                let left = left.instruments.output()?;
+                passthru.full_draw(encoder, left, output.view());
+            }
+            (Some(left), Some(right)) => {
+                let left = left.instruments.output()?;
+                let right = right.instruments.output()?;
+                draw_splitted(
+                    passthru,
+                    encoder,
+                    viewport,
+                    left,
+                    right,
+                    output.view(),
+                    self.split,
+                );
+            }
+        }
+
+        let output = self.meta.set_final_output(output);
+        Some(output)
     }
 
     pub fn update(&mut self, message: ImageMessage) {
-        dbg!(&message);
+        // dbg!(&message);
         match message {
             ImageMessage::SetImage { image } => self.set_image(image),
             ImageMessage::ResizedViewport { size } => self.resize_viewport(size),
@@ -86,6 +129,7 @@ impl ImageWidget {
             }
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
+            ImageMessage::SplitMoved { offset } => todo!(),
         }
     }
 
@@ -93,89 +137,121 @@ impl ImageWidget {
         &mut self,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
         params: &DrawParameters,
     ) {
-        let Some(image) = self.image.as_ref() else {
-            return;
-        };
+        if let Some(image) = &mut self.left {
+            self.meta.nearest(
+                &mut image.instruments,
+                ctx,
+                target,
+                passthru,
+                encoder,
+                viewport,
+                &image.data,
+                params,
+            );
+        }
 
-        self.meta.uncheck_all();
-        self.left.uncheck_all();
-        self.right.uncheck_all();
-
-        self.meta.nearest(
-            &mut self.left,
-            ctx,
-            target,
-            encoder,
-            viewport,
-            image,
-            params,
-        );
+        if let Some(image) = &mut self.right {
+            self.meta.nearest(
+                &mut image.instruments,
+                ctx,
+                target,
+                passthru,
+                encoder,
+                viewport,
+                &image.data,
+                params,
+            );
+        }
     }
 
     fn bilinear(
         &mut self,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
         params: &DrawParameters,
     ) {
-        let Some(image) = self.image.as_ref() else {
-            return;
-        };
+        if let Some(image) = &mut self.left {
+            self.meta.bilinear(
+                &mut image.instruments,
+                ctx,
+                target,
+                passthru,
+                encoder,
+                viewport,
+                &image.data,
+                params,
+            );
+        }
 
-        self.meta.uncheck_all();
-        self.left.uncheck_all();
-        self.right.uncheck_all();
-
-        self.meta.bilinear(
-            &mut self.left,
-            ctx,
-            target,
-            encoder,
-            viewport,
-            image,
-            params,
-        );
+        if let Some(image) = &mut self.right {
+            self.meta.bilinear(
+                &mut image.instruments,
+                ctx,
+                target,
+                passthru,
+                encoder,
+                viewport,
+                &image.data,
+                params,
+            );
+        }
     }
 
     fn lanczos(
         &mut self,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
         params: &DrawParameters,
     ) {
-        let Some(image) = self.image.as_ref() else {
-            return;
-        };
+        if let Some(image) = &mut self.left {
+            self.meta.lanczos(
+                &mut image.instruments,
+                ctx,
+                target,
+                passthru,
+                encoder,
+                viewport,
+                &image.data,
+                params,
+            );
+        }
 
-        self.meta.uncheck_all();
-        self.left.uncheck_all();
-        self.right.uncheck_all();
-
-        self.meta.lanczos(
-            &mut self.left,
-            ctx,
-            target,
-            encoder,
-            viewport,
-            image,
-            params,
-        );
+        if let Some(image) = &mut self.right {
+            self.meta.lanczos(
+                &mut image.instruments,
+                ctx,
+                target,
+                passthru,
+                encoder,
+                viewport,
+                &image.data,
+                params,
+            );
+        }
     }
 
     fn set_image(&mut self, image: ImageMemory) {
         self.meta.replaced_image();
-        self.left.replaced_image();
-        self.right.replaced_image();
+        if let Some(left) = &mut self.left {
+            left.instruments.replaced_image();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.replaced_image();
+        }
 
-        self.image = Some(image);
+        std::mem::swap(&mut self.left, &mut self.right);
+        self.left = Some(SingleImageState::new(image));
 
         let default = DrawParameters::default();
         self.params = DrawParameters {
@@ -186,8 +262,13 @@ impl ImageWidget {
     }
 
     fn resize_viewport(&mut self, size: PhysicalSize<u32>) {
-        self.left.resized();
-        self.right.resized();
+        self.meta.resized();
+        if let Some(left) = &mut self.left {
+            left.instruments.resized();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.resized();
+        }
 
         self.params.viewport = size;
     }
@@ -204,8 +285,12 @@ impl ImageWidget {
 
     fn set_zoom(&mut self, zoom: f32, fix_point: LocalPoint) {
         self.meta.zoomed();
-        self.left.zoomed();
-        self.right.zoomed();
+        if let Some(left) = &mut self.left {
+            left.instruments.zoomed();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.zoomed();
+        }
 
         let zoom = zoom.clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
 
@@ -229,8 +314,12 @@ impl ImageWidget {
 
     fn pan(&mut self, offset: LocalVector) {
         self.meta.panned();
-        self.left.panned();
-        self.right.panned();
+        if let Some(left) = &mut self.left {
+            left.instruments.panned();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.panned();
+        }
 
         self.params.offset += *offset;
         self.clamp_offset();
@@ -238,16 +327,24 @@ impl ImageWidget {
 
     fn reset_pos(&mut self) {
         self.meta.panned();
-        self.left.panned();
-        self.right.panned();
+        if let Some(left) = &mut self.left {
+            left.instruments.panned();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.panned();
+        }
 
         self.params.offset = na::Vector2::zeros();
     }
 
     fn cycle_filters(&mut self) {
         self.meta.cycled_filter();
-        self.left.cycled_filter();
-        self.right.cycled_filter();
+        if let Some(left) = &mut self.left {
+            left.instruments.cycled_filter();
+        }
+        if let Some(right) = &mut self.right {
+            right.instruments.cycled_filter();
+        }
 
         self.params.filter = match self.params.filter {
             ImageFilter::Nearest => ImageFilter::BiLinear,
@@ -263,11 +360,15 @@ impl ImageWidget {
 
         let viewport = self.params.viewport;
 
-        let size = self
-            .image
+        let left = self
+            .left
             .as_ref()
-            .map(ImageMemory::size)
-            .unwrap_or_default();
+            .map_or_else(PhysicalSize::default, |i| i.data.size());
+        let right = self
+            .right
+            .as_ref()
+            .map_or_else(PhysicalSize::default, |i| i.data.size());
+        let size = left.max(right);
 
         let width = viewport.width as f32;
         let height = viewport.height as f32;
@@ -281,6 +382,18 @@ impl ImageWidget {
         let y = self.params.offset.y.clamp(y_min, y_max);
 
         self.params.offset = na::Vector2::new(x, y);
+    }
+}
+
+struct SingleImageState {
+    data: ImageMemory,
+    instruments: ImageDataInstruments,
+}
+
+impl SingleImageState {
+    pub fn new(data: ImageMemory) -> Self {
+        let instruments = ImageDataInstruments::new();
+        Self { data, instruments }
     }
 }
 
@@ -307,6 +420,9 @@ pub enum ImageMessage {
     },
     ResetPosition,
     CycleFilters,
+    SplitMoved {
+        offset: f32,
+    },
 }
 
 impl std::fmt::Debug for ImageMessage {
@@ -333,6 +449,10 @@ impl std::fmt::Debug for ImageMessage {
             Self::ZoomOut { cursor } => f.debug_struct("ZoomOut").field("cursor", cursor).finish(),
             Self::ResetPosition => write!(f, "ResetPosition"),
             Self::CycleFilters => write!(f, "CycleFilters"),
+            Self::SplitMoved { offset } => f
+                .debug_struct("SplitMoved")
+                .field("offset", offset)
+                .finish(),
         }
     }
 }

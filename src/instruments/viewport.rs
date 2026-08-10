@@ -2,19 +2,17 @@ use iced::wgpu;
 use iced_winit::winit::dpi::{PhysicalInsets, PhysicalSize};
 
 use crate::controls::coords::LocalCoords;
-use crate::instruments::GpuContext;
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 
 pub struct Viewport {
-    pipeline: PassThruPipeline,
     coords: LocalCoords,
 }
 
 impl Viewport {
-    pub fn new(ctx: &GpuContext, output_format: wgpu::TextureFormat) -> Self {
-        let pipeline = PassThruPipeline::new(ctx, output_format);
+    pub fn new() -> Self {
+        // let pipeline = PassThruPipeline::new(ctx, output_format);
         let coords = LocalCoords::default();
-        Self { pipeline, coords }
+        Self { coords }
     }
 
     pub fn update_coords(&mut self, coords: LocalCoords) -> bool {
@@ -45,14 +43,9 @@ impl Viewport {
         self.coords.extent()
     }
 
-    pub fn create_texture(&self, ctx: &GpuContext) -> Option<PassThruTexture> {
-        let extent = self.coords.extent()?;
-        let texture = self.pipeline.create_texture(ctx, extent);
-        Some(texture)
-    }
-
     pub fn draw(
         &self,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         rendering: &PassThruTexture,
         target: &wgpu::TextureView,
@@ -97,6 +90,6 @@ impl Viewport {
         // limit rendering to the viewport bounds
         pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
 
-        self.pipeline.draw(&mut pass, rendering);
+        passthru.draw(&mut pass, rendering);
     }
 }

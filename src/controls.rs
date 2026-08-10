@@ -11,6 +11,7 @@ use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
 use crate::controls::coords::LocalCoords;
 use crate::image::{ImageMemory, ImageMessage, ImageWidget};
+use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::scene::RenderWidget;
@@ -34,6 +35,7 @@ pub struct Controls {
     /// coordinates, so store them as such.
     scene_bounds: Cell<Option<PhysicalInsets<u32>>>,
     viewport: Viewport,
+    passthru: PassThruPipeline,
     scene: CurrentScene,
     image: Option<PathBuf>,
 }
@@ -41,12 +43,14 @@ pub struct Controls {
 impl Controls {
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let scene_bounds = Cell::new(None);
-        let viewport = Viewport::new(ctx, target.config.format);
+        let viewport = Viewport::new();
+        let passthru = PassThruPipeline::new(ctx, target.config.format);
         let scene = CurrentScene::scene(ctx, target);
         let image = None;
         Self {
             scene_bounds,
             viewport,
+            passthru,
             scene,
             image,
         }
@@ -186,8 +190,12 @@ impl Controls {
             });
 
         let output = match &mut self.scene {
-            CurrentScene::Scene(scene) => scene.render(ctx, &mut encoder, &self.viewport),
-            CurrentScene::Image(image) => image.render(ctx, target, &mut encoder, &self.viewport),
+            CurrentScene::Scene(scene) => {
+                scene.render(ctx, &self.passthru, &mut encoder, &self.viewport)
+            }
+            CurrentScene::Image(image) => {
+                image.render(ctx, target, &self.passthru, &mut encoder, &self.viewport)
+            }
         };
 
         let Some(output) = output else {
@@ -195,7 +203,8 @@ impl Controls {
         };
 
         // self.render_to_viewport(view, &mut encoder, render_target, bounds);
-        self.viewport.draw(&mut encoder, output, view);
+        self.viewport
+            .draw(&self.passthru, &mut encoder, output, view);
 
         ctx.queue.submit([encoder.finish()]);
     }

@@ -2,6 +2,7 @@ pub mod bind;
 pub mod buffer;
 pub mod mipmap;
 pub mod pipeline;
+pub mod splitview;
 pub mod viewport;
 
 use std::path::Path;

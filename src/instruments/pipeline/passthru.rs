@@ -77,6 +77,38 @@ impl PassThruPipeline {
         PassThruTexture::new(ctx, &self.texture_layout, size, self.output_format)
     }
 
+    pub fn full_draw(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        rendering: &PassThruTexture,
+        target: &wgpu::TextureView,
+    ) {
+        let in_size = rendering.texture().size();
+        let out_size = target.texture().size();
+        assert_eq!(
+            in_size, out_size,
+            "input texture does not match output size"
+        );
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Viewport PassThru Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load, // iced drew the gui already, so load that
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        self.draw(&mut pass, rendering);
+    }
+
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, texture: &PassThruTexture) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, texture.bind(), &[]);

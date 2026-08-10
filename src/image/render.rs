@@ -24,12 +24,14 @@ use crate::instruments::pipeline::image::{
     RenderNearestPipeline,
     SimpleImageRenderPipelineLayout,
 };
-use crate::instruments::pipeline::passthru::PassThruTexture;
+use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
 #[derive(Default)]
 pub struct ImageMetaInstruments {
+    final_output: Use<PassThruTexture>,
+
     storage_layout: Use<StorageSrcDstLayout>,
     kernel_layout: Use<KernelLayout>,
     convolution_layout: Use<ConvolutionPipelineLayout>,
@@ -55,18 +57,31 @@ impl ImageMetaInstruments {
         Self::default()
     }
 
+    pub const fn final_output(&self) -> Option<&PassThruTexture> {
+        let Use::Active(output) = &self.final_output else {
+            return None;
+        };
+        Some(output)
+    }
+
+    pub fn set_final_output(&mut self, output: PassThruTexture) -> &PassThruTexture {
+        self.final_output = Use::Active(output);
+        self.final_output.active()
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn nearest(
         &mut self,
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
         image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        let Some(output) = data.create_output(ctx, viewport) else {
+        let Some(output) = data.create_output(ctx, viewport, passthru) else {
             return;
         };
 
@@ -105,12 +120,13 @@ impl ImageMetaInstruments {
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
         image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        let Some(output) = data.create_output(ctx, viewport) else {
+        let Some(output) = data.create_output(ctx, viewport, passthru) else {
             return;
         };
 
@@ -149,12 +165,13 @@ impl ImageMetaInstruments {
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         target: &TargetContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
         image: &ImageMemory,
         params: &DrawParameters,
     ) {
-        let Some(output) = data.create_output(ctx, viewport) else {
+        let Some(output) = data.create_output(ctx, viewport, passthru) else {
             return;
         };
 
@@ -199,6 +216,31 @@ impl ImageMetaInstruments {
 
 /// Instrumentalization
 impl ImageMetaInstruments {
+    pub fn create_output(
+        &mut self,
+        ctx: &GpuContext,
+        passthru: &PassThruPipeline,
+        viewport: &Viewport,
+    ) -> Option<PassThruTexture> {
+        let Some(extent) = viewport.extent() else {
+            self.final_output = self.final_output.take().make_unused();
+            return None;
+        };
+
+        match self.final_output.take() {
+            checked @ (Use::Active(_) | Use::Invalid) => {
+                self.final_output = checked;
+                None
+            }
+            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extent => {
+                Some(output)
+            }
+            Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
+                Some(passthru.create_texture(ctx, extent))
+            }
+        }
+    }
+
     fn create_texture_layout(&mut self, ctx: &GpuContext) {
         if self.texture_layout.checked() {
             return;
@@ -588,6 +630,8 @@ impl ImageMetaInstruments {
     }
 
     pub fn uncheck_all(&mut self) {
+        self.final_output.uncheck();
+
         self.storage_layout.uncheck();
         self.kernel_layout.uncheck();
         self.convolution_layout.uncheck();
@@ -608,18 +652,27 @@ impl ImageMetaInstruments {
     }
 
     pub fn replaced_image(&mut self) {
+        self.final_output.degrade();
         self.meta_buffer.degrade();
     }
 
+    pub fn resized(&mut self) {
+        self.final_output.degrade();
+    }
+
     pub fn zoomed(&mut self) {
+        self.final_output.degrade();
         self.meta_buffer.degrade();
     }
 
     pub fn panned(&mut self) {
+        self.final_output.degrade();
         self.meta_buffer.degrade();
     }
 
     pub fn cycled_filter(&mut self) {
+        self.final_output.degrade();
+
         self.storage_layout.discard();
         self.kernel_layout.discard();
         self.convolution_layout.discard();
@@ -710,8 +763,13 @@ impl ImageDataInstruments {
         self.blurred.discard();
     }
 
-    fn create_output(&mut self, ctx: &GpuContext, viewport: &Viewport) -> Option<PassThruTexture> {
-        let Some(extend) = viewport.extent() else {
+    fn create_output(
+        &mut self,
+        ctx: &GpuContext,
+        viewport: &Viewport,
+        passthru: &PassThruPipeline,
+    ) -> Option<PassThruTexture> {
+        let Some(extent) = viewport.extent() else {
             self.output = self.output.take().make_unused();
             return None;
         };
@@ -721,10 +779,12 @@ impl ImageDataInstruments {
                 self.output = checked;
                 None
             }
-            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extend => {
+            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extent => {
                 Some(output)
             }
-            Use::Recycle(_) | Use::Unused(_) | Use::Missing => viewport.create_texture(ctx),
+            Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
+                Some(passthru.create_texture(ctx, extent))
+            }
         }
     }
 }

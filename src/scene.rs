@@ -1,7 +1,7 @@
 use iced_wgpu::wgpu;
 use iced_winit::core::Color;
 
-use crate::instruments::pipeline::passthru::PassThruTexture;
+use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
@@ -54,6 +54,7 @@ impl RenderWidget {
     pub fn render(
         &mut self,
         ctx: &GpuContext,
+        passthru: &PassThruPipeline,
         encoder: &mut wgpu::CommandEncoder,
         viewport: &Viewport,
     ) -> Option<&PassThruTexture> {
@@ -65,7 +66,8 @@ impl RenderWidget {
         {
             output
         } else {
-            let output = viewport.create_texture(ctx).expect("must have size");
+            let extent = viewport.extent()?;
+            let output = passthru.create_texture(ctx, extent);
             self.draw(encoder, &output);
             output
         };

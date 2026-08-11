@@ -32,7 +32,7 @@ pub fn draw_splitted(
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load, // iced drew the gui already, so load that
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -42,42 +42,42 @@ pub fn draw_splitted(
     });
 
     let wgpu::Extent3d { width, height, .. } = size;
-    let width = width as f32;
-    let height = height as f32;
 
     let full = iced::Rectangle {
-        x: 0.,
-        y: 0.,
+        x: 0,
+        y: 0,
         width,
         height,
     };
 
     let (bounds_left, bounds_right) = match split {
-        ComparisonSplit::FullLeft => (Some(full), None),
+        ComparisonSplit::FullLeft => (None, Some(full)),
         ComparisonSplit::Split(split) => {
+            let split = split as u32;
             let left = iced::Rectangle {
-                x: 0.,
-                y: 0.,
-                width: split - 1.,
+                x: 0,
+                y: 0,
+                width: split.saturating_sub(1),
                 height,
             };
+            let x = width.min(split + 1);
             let right = iced::Rectangle {
-                x: split + 1.,
-                y: 0.,
-                width: width - (split + 1.),
+                x,
+                y: 0,
+                width: width.saturating_sub(x),
                 height,
             };
             (Some(left), Some(right))
         }
-        ComparisonSplit::FullRight => (None, Some(full)),
+        ComparisonSplit::FullRight => (Some(full), None),
     };
 
     if let Some(bounds) = bounds_left {
-        pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
+        pass.set_scissor_rect(bounds.x, bounds.y, bounds.width, bounds.height);
         passthru.draw(&mut pass, left);
     }
     if let Some(bounds) = bounds_right {
-        pass.set_viewport(bounds.x, bounds.y, bounds.width, bounds.height, 0., 1.);
-        passthru.draw(&mut pass, left);
+        pass.set_scissor_rect(bounds.x, bounds.y, bounds.width, bounds.height);
+        passthru.draw(&mut pass, right);
     }
 }

@@ -8,6 +8,7 @@ use iced_wgpu::core::SmolStr;
 use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
+use crate::app::DraggingState;
 use crate::controls::coords::{LocalPoint, LocalVector};
 use crate::image::filters::GaussFilter;
 use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
@@ -23,7 +24,7 @@ use crate::instruments::{GpuContext, TargetContext};
 pub enum ComparisonSplit {
     #[default]
     FullLeft,
-    Split(u32),
+    Split(f32),
     FullRight,
 }
 
@@ -35,6 +36,7 @@ pub struct ImageWidget {
 
     params: DrawParameters,
     split: ComparisonSplit,
+    dragging: DraggingState,
 }
 
 impl ImageWidget {
@@ -49,7 +51,12 @@ impl ImageWidget {
             right: None,
             params: DrawParameters::default(),
             split: ComparisonSplit::default(),
+            dragging: DraggingState::Released,
         }
+    }
+
+    pub const fn split(&self) -> ComparisonSplit {
+        self.split
     }
 
     pub fn render(
@@ -110,7 +117,6 @@ impl ImageWidget {
     }
 
     pub fn update(&mut self, message: ImageMessage) {
-        // dbg!(&message);
         match message {
             ImageMessage::SetImage { image } => self.set_image(image),
             ImageMessage::ResizedViewport { size } => self.resize_viewport(size),
@@ -129,7 +135,7 @@ impl ImageWidget {
             }
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
-            ImageMessage::SplitMoved { offset } => todo!(),
+            ImageMessage::DragSplit { active } => self.drag_split(active),
         }
     }
 
@@ -271,6 +277,12 @@ impl ImageWidget {
         }
 
         self.params.viewport = size;
+
+        if let ComparisonSplit::Split(pos) = self.split
+            && pos >= size.width as f32
+        {
+            self.split = ComparisonSplit::FullRight;
+        }
     }
 
     fn zoom_in(&mut self, fix_point: LocalPoint) {
@@ -313,16 +325,44 @@ impl ImageWidget {
     }
 
     fn pan(&mut self, offset: LocalVector) {
-        self.meta.panned();
-        if let Some(left) = &mut self.left {
-            left.instruments.panned();
-        }
-        if let Some(right) = &mut self.right {
-            right.instruments.panned();
-        }
+        match self.dragging {
+            DraggingState::Released => {
+                self.meta.panned();
+                if let Some(left) = &mut self.left {
+                    left.instruments.panned();
+                }
+                if let Some(right) = &mut self.right {
+                    right.instruments.panned();
+                }
 
-        self.params.offset += *offset;
-        self.clamp_offset();
+                self.params.offset += *offset;
+                self.clamp_offset();
+            }
+            DraggingState::Dragging => {
+                // only final image is out-of-date
+                self.meta.panned();
+
+                let x = offset.x;
+                let width = self.params.viewport.width as f32;
+
+                // move split according to drag
+                let next = match self.split {
+                    ComparisonSplit::FullLeft if x > 0. => ComparisonSplit::Split(x),
+                    ComparisonSplit::Split(pos) => ComparisonSplit::Split(pos + x),
+                    ComparisonSplit::FullRight if x < 0. => ComparisonSplit::Split(width + x),
+                    last @ (ComparisonSplit::FullLeft | ComparisonSplit::FullRight) => last,
+                };
+                // clamp split to viewport size
+                let next = match next {
+                    ComparisonSplit::Split(pos) if pos <= 0. => ComparisonSplit::FullLeft,
+                    ComparisonSplit::Split(pos) if pos >= width => ComparisonSplit::FullRight,
+                    keep @ (ComparisonSplit::Split(_)
+                    | ComparisonSplit::FullLeft
+                    | ComparisonSplit::FullRight) => keep,
+                };
+                self.split = next;
+            }
+        }
     }
 
     fn reset_pos(&mut self) {
@@ -352,6 +392,13 @@ impl ImageWidget {
             ImageFilter::Lanczos => ImageFilter::Nearest,
         };
         println!("Filter: {:?}", self.params.filter);
+    }
+
+    const fn drag_split(&mut self, active: bool) {
+        self.dragging = match active {
+            true => DraggingState::Dragging,
+            false => DraggingState::Released,
+        };
     }
 
     /// Make sure that at least 10% of the viewport area shows part of the image.
@@ -420,8 +467,8 @@ pub enum ImageMessage {
     },
     ResetPosition,
     CycleFilters,
-    SplitMoved {
-        offset: f32,
+    DragSplit {
+        active: bool,
     },
 }
 
@@ -449,10 +496,9 @@ impl std::fmt::Debug for ImageMessage {
             Self::ZoomOut { cursor } => f.debug_struct("ZoomOut").field("cursor", cursor).finish(),
             Self::ResetPosition => write!(f, "ResetPosition"),
             Self::CycleFilters => write!(f, "CycleFilters"),
-            Self::SplitMoved { offset } => f
-                .debug_struct("SplitMoved")
-                .field("offset", offset)
-                .finish(),
+            Self::DragSplit { active } => {
+                f.debug_struct("DragSplit").field("active", active).finish()
+            }
         }
     }
 }

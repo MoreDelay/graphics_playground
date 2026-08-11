@@ -55,7 +55,6 @@ pub fn draw_splitted(
     let (bounds_left, bounds_right) = match split {
         ComparisonSplit::FullLeft => (Some(full), None),
         ComparisonSplit::Split(split) => {
-            let split = split as f32;
             let left = iced::Rectangle {
                 x: 0.,
                 y: 0.,

@@ -429,7 +429,7 @@ impl Ready {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum DraggingState {
+pub enum DraggingState {
     #[default]
     Released,
     Dragging,

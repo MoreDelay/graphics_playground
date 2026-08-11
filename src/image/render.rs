@@ -791,11 +791,16 @@ impl ImageDataInstruments {
 
 #[derive(Default)]
 enum Use<T> {
+    /// Unchecked and unavailable
     #[default]
     Missing,
+    /// Checked but unused
     Invalid,
+    /// Checked and available
     Active(T),
+    /// Unchecked but available
     Recycle(T),
+    /// Checked and available but unused
     Unused(T),
 }
 

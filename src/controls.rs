@@ -1,8 +1,8 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use iced::Rectangle;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
+use iced::{Event, Rectangle};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
@@ -10,7 +10,7 @@ use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 
 use crate::controls::coords::LocalCoords;
-use crate::image::{ImageMemory, ImageMessage, ImageWidget};
+use crate::image::{ComparisonSplit, ImageMemory, ImageMessage, ImageWidget};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
@@ -27,6 +27,7 @@ pub enum Message {
     ScrollDown,
     Drag(iced::Vector),
     KeyPress(SmolStr),
+    DragSplit { active: bool },
 }
 
 pub struct Controls {
@@ -67,8 +68,13 @@ impl Controls {
         };
 
         let bounds = &self.scene_bounds;
+        let split = match &self.scene {
+            CurrentScene::Scene(_) => None,
+            CurrentScene::Image(image) => Some(image.split()),
+        };
         let placeholder = PlaceholderWidget {
             bounds,
+            split,
             bg_color,
             scale_factor,
         };
@@ -119,6 +125,7 @@ impl Controls {
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
             (CurrentScene::Scene(_), Message::Drag { .. }) => (),
             (CurrentScene::Scene(_), Message::KeyPress(..)) => (),
+            (CurrentScene::Scene(_), Message::DragSplit { .. }) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::scene(ctx, target);
@@ -147,6 +154,10 @@ impl Controls {
                 let Some(message) = ImageMessage::from_key(&key, cursor) else {
                     return;
                 };
+                widget.update(message);
+            }
+            (CurrentScene::Image(widget), Message::DragSplit { active }) => {
+                let message = ImageMessage::DragSplit { active };
                 widget.update(message);
             }
         }
@@ -248,16 +259,70 @@ impl CurrentScene {
 #[derive(Debug, Clone)]
 pub struct PlaceholderWidget<'a> {
     bounds: &'a Cell<Option<PhysicalInsets<u32>>>,
+    split: Option<ComparisonSplit>,
     bg_color: Color,
     scale_factor: f32,
 }
 
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for PlaceholderWidget<'_>
+impl<Theme, Renderer> Widget<Message, Theme, Renderer> for PlaceholderWidget<'_>
 where
     Renderer: renderer::Renderer,
 {
     fn size(&self) -> iced::Size<iced::Length> {
         iced::Size::new(iced::Length::Fill, iced::Length::Fill)
+    }
+
+    fn update(
+        &mut self,
+        _tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &Renderer,
+        _clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        if shell.is_event_captured() {
+            return;
+        }
+
+        let Some(rect) = self.split_rect(layout) else {
+            return;
+        };
+
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let Some(pos) = cursor.position() else {
+                    return;
+                };
+
+                let bounds = self.compute_bounds(layout);
+                let coords = LocalCoords::new(bounds, self.scale_factor);
+                let Some(local) = coords.local_point(pos) else {
+                    return;
+                };
+
+                let local = iced::Point {
+                    x: local.x,
+                    y: local.y,
+                };
+                let inside = rect.contains(local);
+                if !inside {
+                    return;
+                }
+                shell.capture_event();
+                shell.publish(Message::DragSplit { active: true });
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                shell.publish(Message::DragSplit { active: false });
+            }
+            Event::Keyboard(_)
+            | Event::Mouse(_)
+            | Event::Window(_)
+            | Event::Touch(_)
+            | Event::InputMethod(_) => (),
+        }
     }
 
     fn layout(
@@ -301,26 +366,24 @@ where
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        const OFFSET: f32 = 400.;
-        const WIDTH: f32 = 20.;
-
         let mouse::Cursor::Available(point) = cursor else {
             return mouse::Interaction::None;
         };
+        let Some(rect) = self.split_rect(layout) else {
+            return mouse::Interaction::None;
+        };
+
         let bounds = self.compute_bounds(layout);
         let coords = LocalCoords::new(bounds, self.scale_factor);
         let Some(local) = coords.local_point(point) else {
             return mouse::Interaction::None;
         };
 
-        let rect = PhysicalInsets {
-            top: 0.,
-            left: OFFSET - WIDTH / 2.,
-            bottom: coords.size().height as f32,
-            right: OFFSET + WIDTH / 2.,
+        let local = iced::Point {
+            x: local.x,
+            y: local.y,
         };
-        let inside = (rect.left <= local.x && local.x <= rect.right - 1.)
-            && (rect.top <= local.y && local.y <= rect.bottom - 1.);
+        let inside = rect.contains(local);
         if inside {
             mouse::Interaction::Pointer
         } else {
@@ -330,6 +393,8 @@ where
 }
 
 impl PlaceholderWidget<'_> {
+    const SPLIT_WIDTH: f32 = 20.;
+
     fn compute_bounds(&self, layout: Layout<'_>) -> PhysicalInsets<u32> {
         let bounds = layout.bounds();
         let inset = LogicalInsets {
@@ -339,6 +404,23 @@ impl PlaceholderWidget<'_> {
             right: bounds.x + bounds.width,
         };
         inset.to_physical(self.scale_factor as f64)
+    }
+
+    fn split_rect(&self, layout: Layout<'_>) -> Option<Rectangle<f32>> {
+        let bounds = self.compute_bounds(layout);
+        let coords = LocalCoords::new(bounds, self.scale_factor);
+        let x = match self.split? {
+            ComparisonSplit::FullLeft => 0.,
+            ComparisonSplit::Split(pos) => pos,
+            ComparisonSplit::FullRight => coords.size().width as f32,
+        };
+
+        Some(Rectangle {
+            x: x - Self::SPLIT_WIDTH / 2.,
+            y: 0.,
+            width: Self::SPLIT_WIDTH,
+            height: coords.size().height as f32,
+        })
     }
 }
 

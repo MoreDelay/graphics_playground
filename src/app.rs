@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,8 +17,8 @@ use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::EventLoopError;
 use winit::event::{ElementState, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, ModifiersState};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::Key;
 use winit::window::WindowAttributes;
 
 use crate::controls::{Controls, Message};
@@ -59,14 +60,14 @@ impl winit::application::ApplicationHandler for Runner {
         };
 
         #[expect(clippy::wildcard_enum_match_arm)]
-        match event {
+        let control_flow = match event {
             WindowEvent::RedrawRequested => ready.redraw(),
             WindowEvent::CursorMoved { position, .. } => ready.cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => ready.mouse_input(button, state),
             WindowEvent::MouseWheel { delta, .. } => ready.scrolled(delta),
             WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changed(modifiers),
             WindowEvent::Resized(_) => ready.resized(),
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => ControlFlow::Break(()),
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -75,19 +76,17 @@ impl winit::application::ApplicationHandler for Runner {
                         ..
                     },
                 ..
-            } => match symbol.as_str() {
-                "q" if ready.modifiers.control_key() => {
-                    event_loop.exit();
-                }
-                _ => ready.key_pressed(symbol.clone()),
-            },
-            _ => {}
+            } => ready.key_pressed(symbol.clone()),
+            _ => ControlFlow::Continue(()),
+        };
+        if control_flow == ControlFlow::Break(()) {
+            event_loop.exit();
         }
 
         // Map window event to iced event
         let scale_factor = ready.target_ctx.window.scale_factor() as f32;
         {
-            if let Some(event) = window_event(event, scale_factor, ready.modifiers) {
+            if let Some(event) = window_event(event, scale_factor, ready.controls.modifiers()) {
                 ready.events.push(event);
             }
         }
@@ -117,9 +116,13 @@ impl winit::application::ApplicationHandler for Runner {
 
             // update our UI with any messages
             for message in messages {
-                ready
+                let response = ready
                     .controls
                     .update(&ready.gpu_ctx, &ready.target_ctx, message);
+                match response {
+                    ControlFlow::Continue(()) => (),
+                    ControlFlow::Break(()) => event_loop.exit(),
+                }
             }
 
             // and request a redraw
@@ -135,7 +138,6 @@ struct Ready {
     // state of gui
     controls: Controls,
     cursor: Cursor,
-    modifiers: ModifiersState,
     resized: bool,
     // objects used by iced but otherwise unused
     renderer: Renderer,
@@ -238,10 +240,9 @@ impl Ready {
         let renderer = Renderer::new(engine, iced::Font::default(), iced::Pixels::from(16));
 
         // You should change this if you want to render continuously
-        event_loop.set_control_flow(ControlFlow::Wait);
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
         let cursor = Cursor::Unavailable;
-        let modifiers = ModifiersState::default();
         let events = Vec::new();
         let cache = Cache::new();
         let resized = false;
@@ -251,7 +252,6 @@ impl Ready {
             target_ctx,
             controls,
             cursor,
-            modifiers,
             resized,
             renderer,
             events,
@@ -261,9 +261,9 @@ impl Ready {
         }
     }
 
-    fn redraw(&mut self) {
+    fn redraw(&mut self) -> ControlFlow<()> {
         if self.resized {
-            self.reconfigure_surface();
+            self.reconfigure_surface()?;
             self.resized = false;
         }
 
@@ -279,7 +279,7 @@ impl Ready {
                 warn!("Error while drawing, try again next frame: {error}");
                 // Try rendering again next frame.
                 self.target_ctx.window.request_redraw();
-                return;
+                return ControlFlow::Continue(());
             }
         };
 
@@ -347,9 +347,10 @@ impl Ready {
 
         // Present the frame
         frame.present();
+        ControlFlow::Continue(())
     }
 
-    fn reconfigure_surface(&mut self) {
+    fn reconfigure_surface(&mut self) -> ControlFlow<()> {
         let PhysicalSize { width, height } = self.target_ctx.window.inner_size();
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
@@ -359,14 +360,15 @@ impl Ready {
 
         let message = Message::SetScaleFactor(scale_factor);
         self.controls
-            .update(&self.gpu_ctx, &self.target_ctx, message);
+            .update(&self.gpu_ctx, &self.target_ctx, message)?;
 
         self.target_ctx
             .surface
             .configure(&self.gpu_ctx.device, &self.target_ctx.config);
+        ControlFlow::Continue(())
     }
 
-    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) -> ControlFlow<()> {
         let cursor = cursor_position(position, self.target_ctx.window.scale_factor() as f32);
         self.cursor = Cursor::Available(cursor);
 
@@ -374,16 +376,16 @@ impl Ready {
         let position = na::Point2::new(x, y);
         let message = Message::CursorMoved(position);
         self.controls
-            .update(&self.gpu_ctx, &self.target_ctx, message);
+            .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
-    fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
+    fn mouse_input(&mut self, button: MouseButton, state: ElementState) -> ControlFlow<()> {
         let message = Message::MouseInput { button, state };
         self.controls
-            .update(&self.gpu_ctx, &self.target_ctx, message);
+            .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
-    fn scrolled(&mut self, delta: MouseScrollDelta) {
+    fn scrolled(&mut self, delta: MouseScrollDelta) -> ControlFlow<()> {
         use std::cmp::Ordering;
 
         let cmp = match delta {
@@ -397,21 +399,25 @@ impl Ready {
         };
         if let Some(message) = message {
             self.controls
-                .update(&self.gpu_ctx, &self.target_ctx, message);
+                .update(&self.gpu_ctx, &self.target_ctx, message)?;
         }
+        ControlFlow::Continue(())
     }
 
-    fn key_pressed(&mut self, key: SmolStr) {
+    fn key_pressed(&mut self, key: SmolStr) -> ControlFlow<()> {
         let message = Message::KeyPress(key);
         self.controls
-            .update(&self.gpu_ctx, &self.target_ctx, message);
+            .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
-    fn modifiers_changed(&mut self, modifiers: Modifiers) {
-        self.modifiers = modifiers.state();
+    fn modifiers_changed(&mut self, modifiers: Modifiers) -> ControlFlow<()> {
+        let message = Message::ModifiersChanged(modifiers.state());
+        self.controls
+            .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
-    const fn resized(&mut self) {
+    const fn resized(&mut self) -> ControlFlow<()> {
         self.resized = true;
+        ControlFlow::Continue(())
     }
 }

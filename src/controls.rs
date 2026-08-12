@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
@@ -9,6 +10,7 @@ use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
 use iced_winit::winit::event::{ElementState, MouseButton};
+use iced_winit::winit::keyboard::ModifiersState;
 use nalgebra as na;
 
 use crate::controls::coords::{LocalCoords, LocalPoint};
@@ -32,6 +34,7 @@ pub enum Message {
         button: MouseButton,
         state: ElementState,
     },
+    ModifiersChanged(ModifiersState),
     KeyPress(SmolStr),
     DragSplit {
         active: bool,
@@ -50,6 +53,7 @@ pub struct Controls {
 
     mouse_button: ElementState,
     cursor: CursorState,
+    modifiers: ModifiersState,
 }
 
 impl Controls {
@@ -61,6 +65,7 @@ impl Controls {
         let image = None;
         let mouse_button = ElementState::Released;
         let cursor = CursorState::default();
+        let modifiers = ModifiersState::default();
         Self {
             scene_bounds,
             viewport,
@@ -69,6 +74,7 @@ impl Controls {
             image,
             mouse_button,
             cursor,
+            modifiers,
         }
     }
 
@@ -112,7 +118,17 @@ impl Controls {
         .into()
     }
 
-    pub fn update(&mut self, ctx: &GpuContext, target: &TargetContext, message: Message) {
+    // Handle an application-specific event
+    //
+    // TODO: Returns std::ops::ControlFlow because this can be short-curcuited with `?` try
+    // operator. Replace with a custom type when the `Try` trait is stabilized:
+    // https://github.com/rust-lang/rust/issues/84277
+    pub fn update(
+        &mut self,
+        ctx: &GpuContext,
+        target: &TargetContext,
+        message: Message,
+    ) -> ControlFlow<()> {
         let cursor = match self.cursor {
             CursorState::Unknown => None,
             CursorState::LastPos(pos) => Some(pos),
@@ -121,9 +137,18 @@ impl Controls {
 
         match (&mut self.scene, message) {
             (_, Message::SetScaleFactor(factor)) => self.viewport.update_scale_factor(factor),
+            (_, Message::ModifiersChanged(mods)) => self.modifiers = mods,
             (_, Message::CursorMoved(position)) => self.cursor_moved(position),
+            (_, Message::KeyPress(key)) => match key.as_str() {
+                "q" if self.modifiers.control_key() => {
+                    return ControlFlow::Break(());
+                }
+                _ => self.key_pressed(&key),
+            },
             (_, Message::MouseInput { button, state }) => {
-                let MouseButton::Left = button else { return };
+                let MouseButton::Left = button else {
+                    return ControlFlow::Break(());
+                };
                 self.mouse_button = state;
             }
 
@@ -136,7 +161,6 @@ impl Controls {
             }
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
-            (CurrentScene::Scene(_), Message::KeyPress(..)) => (),
             (CurrentScene::Scene(_), Message::DragSplit { .. }) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
@@ -157,17 +181,12 @@ impl Controls {
                 let message = ImageMessage::ZoomOut { cursor };
                 widget.update(message);
             }
-            (CurrentScene::Image(widget), Message::KeyPress(key)) => {
-                let Some(message) = ImageMessage::from_key(&key, cursor) else {
-                    return;
-                };
-                widget.update(message);
-            }
             (CurrentScene::Image(widget), Message::DragSplit { active }) => {
                 let message = ImageMessage::DragSplit { active };
                 widget.update(message);
             }
         }
+        ControlFlow::Continue(())
     }
 
     pub const fn min_window_size() -> LogicalSize<u32> {
@@ -175,6 +194,10 @@ impl Controls {
             width: 200 + 100,
             height: 200,
         }
+    }
+
+    pub const fn modifiers(&self) -> ModifiersState {
+        self.modifiers
     }
 
     /// Must be called after [`Controls::view`] to know the viewport bounds.
@@ -232,6 +255,21 @@ impl Controls {
             .set_title("Pick image to display")
             .add_filter("image", &["jpg", "jpeg", "png", "avif", "webp", "jxl"])
             .pick_file()
+    }
+
+    fn key_pressed(&mut self, key: &SmolStr) {
+        let Some(pos) = self.cursor.pos() else { return };
+        let pos = self.viewport.coords().local_point(pos);
+
+        match &mut self.scene {
+            CurrentScene::Scene(_) => (),
+            CurrentScene::Image(widget) => {
+                let Some(message) = ImageMessage::from_key(key, pos) else {
+                    return;
+                };
+                widget.update(message);
+            }
+        }
     }
 
     fn cursor_moved(&mut self, position: na::Point2<f32>) {

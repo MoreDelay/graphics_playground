@@ -7,8 +7,9 @@ use iced::{Event, Rectangle};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
+use iced_winit::conversion::cursor_position;
 use iced_winit::core::{Color, Element, Theme};
-use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
+use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets, PhysicalPosition};
 use iced_winit::winit::event::{ElementState, MouseButton};
 use iced_winit::winit::keyboard::ModifiersState;
 use nalgebra as na;
@@ -198,6 +199,16 @@ impl Controls {
 
     pub const fn modifiers(&self) -> ModifiersState {
         self.modifiers
+    }
+
+    pub fn cursor(&self) -> iced::mouse::Cursor {
+        let Some(pos) = self.cursor.pos() else {
+            return iced::mouse::Cursor::Unavailable;
+        };
+        let pos = PhysicalPosition { x: pos.x, y: pos.y }.cast();
+        let scale = self.viewport.coords().scale_factor();
+        let cursor = cursor_position(pos, scale);
+        iced::mouse::Cursor::Available(cursor)
     }
 
     /// Must be called after [`Controls::view`] to know the viewport bounds.

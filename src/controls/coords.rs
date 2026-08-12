@@ -42,7 +42,6 @@ impl LocalCoords {
         self.bounds
     }
 
-    #[expect(dead_code)]
     pub const fn scale_factor(self) -> f32 {
         self.scale_factor
     }

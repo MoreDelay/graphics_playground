@@ -3,12 +3,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use iced::Event;
-use iced::advanced::mouse::Cursor;
 use iced::futures::executor::block_on;
 use iced_graphics::{Shell, Viewport};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Engine, Renderer, wgpu};
-use iced_winit::conversion::{cursor_position, window_event};
+use iced_winit::conversion::window_event;
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::{Clipboard, winit};
@@ -105,7 +104,7 @@ impl winit::application::ApplicationHandler for Runner {
 
             let _ = interface.update(
                 &ready.events,
-                ready.cursor,
+                ready.controls.cursor(),
                 &mut ready.renderer,
                 &mut ready.clipboard,
                 &mut messages,
@@ -137,7 +136,6 @@ struct Ready {
     target_ctx: TargetContext,
     // state of gui
     controls: Controls,
-    cursor: Cursor,
     resized: bool,
     // objects used by iced but otherwise unused
     renderer: Renderer,
@@ -242,7 +240,6 @@ impl Ready {
         // You should change this if you want to render continuously
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
-        let cursor = Cursor::Unavailable;
         let events = Vec::new();
         let cache = Cache::new();
         let resized = false;
@@ -251,7 +248,6 @@ impl Ready {
             gpu_ctx,
             target_ctx,
             controls,
-            cursor,
             resized,
             renderer,
             events,
@@ -299,7 +295,7 @@ impl Ready {
             &[Event::Window(
                 window::Event::RedrawRequested(Instant::now()),
             )],
-            self.cursor,
+            self.controls.cursor(),
             &mut self.renderer,
             &mut self.clipboard,
             &mut Vec::new(),
@@ -324,7 +320,7 @@ impl Ready {
             &mut self.renderer,
             &iced::Theme::Dark,
             &renderer::Style::default(),
-            self.cursor,
+            self.controls.cursor(),
         );
         self.cache = interface.into_cache();
 
@@ -369,9 +365,6 @@ impl Ready {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) -> ControlFlow<()> {
-        let cursor = cursor_position(position, self.target_ctx.window.scale_factor() as f32);
-        self.cursor = Cursor::Available(cursor);
-
         let PhysicalPosition { x, y } = position.cast();
         let position = na::Point2::new(x, y);
         let message = Message::CursorMoved(position);

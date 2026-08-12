@@ -10,7 +10,6 @@ pub struct Viewport {
 
 impl Viewport {
     pub fn new() -> Self {
-        // let pipeline = PassThruPipeline::new(ctx, output_format);
         let coords = LocalCoords::default();
         Self { coords }
     }

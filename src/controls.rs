@@ -8,8 +8,10 @@ use iced_wgpu::{Renderer, wgpu};
 use iced_widget::{button, column, row, text};
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets};
+use iced_winit::winit::event::{ElementState, MouseButton};
+use nalgebra as na;
 
-use crate::controls::coords::LocalCoords;
+use crate::controls::coords::{LocalCoords, LocalPoint};
 use crate::image::{ComparisonSplit, ImageMemory, ImageMessage, ImageWidget};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
@@ -25,9 +27,15 @@ pub enum Message {
     SelectFile,
     ScrollUp,
     ScrollDown,
-    Drag(iced::Vector),
+    CursorMoved(na::Point2<f32>),
+    MouseInput {
+        button: MouseButton,
+        state: ElementState,
+    },
     KeyPress(SmolStr),
-    DragSplit { active: bool },
+    DragSplit {
+        active: bool,
+    },
 }
 
 pub struct Controls {
@@ -39,6 +47,9 @@ pub struct Controls {
     passthru: PassThruPipeline,
     scene: CurrentScene,
     image: Option<PathBuf>,
+
+    mouse_button: ElementState,
+    cursor: CursorState,
 }
 
 impl Controls {
@@ -48,12 +59,16 @@ impl Controls {
         let passthru = PassThruPipeline::new(ctx, target.config.format);
         let scene = CurrentScene::scene(ctx, target);
         let image = None;
+        let mouse_button = ElementState::Released;
+        let cursor = CursorState::default();
         Self {
             scene_bounds,
             viewport,
             passthru,
             scene,
             image,
+            mouse_button,
+            cursor,
         }
     }
 
@@ -97,22 +112,20 @@ impl Controls {
         .into()
     }
 
-    pub fn update(
-        &mut self,
-        message: Message,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        cursor: iced::mouse::Cursor,
-    ) {
-        let cursor = match cursor {
-            iced::mouse::Cursor::Available(point) => Some(point),
-            iced::mouse::Cursor::Levitating(point) => Some(point),
-            iced::mouse::Cursor::Unavailable => None,
+    pub fn update(&mut self, ctx: &GpuContext, target: &TargetContext, message: Message) {
+        let cursor = match self.cursor {
+            CursorState::Unknown => None,
+            CursorState::LastPos(pos) => Some(pos),
         };
         let cursor = cursor.and_then(|cursor| self.viewport.coords().local_point(cursor));
 
         match (&mut self.scene, message) {
             (_, Message::SetScaleFactor(factor)) => self.viewport.update_scale_factor(factor),
+            (_, Message::CursorMoved(position)) => self.cursor_moved(position),
+            (_, Message::MouseInput { button, state }) => {
+                let MouseButton::Left = button else { return };
+                self.mouse_button = state;
+            }
 
             (CurrentScene::Scene(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
@@ -123,7 +136,6 @@ impl Controls {
             }
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
-            (CurrentScene::Scene(_), Message::Drag { .. }) => (),
             (CurrentScene::Scene(_), Message::KeyPress(..)) => (),
             (CurrentScene::Scene(_), Message::DragSplit { .. }) => (),
 
@@ -143,11 +155,6 @@ impl Controls {
             }
             (CurrentScene::Image(widget), Message::ScrollDown) => {
                 let message = ImageMessage::ZoomOut { cursor };
-                widget.update(message);
-            }
-            (CurrentScene::Image(widget), Message::Drag(offset)) => {
-                let offset = self.viewport.coords().local_vector(offset);
-                let message = ImageMessage::Pan { offset };
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::KeyPress(key)) => {
@@ -226,6 +233,30 @@ impl Controls {
             .add_filter("image", &["jpg", "jpeg", "png", "avif", "webp", "jxl"])
             .pick_file()
     }
+
+    fn cursor_moved(&mut self, position: na::Point2<f32>) {
+        let cursor = CursorState::LastPos(position);
+        let last = std::mem::replace(&mut self.cursor, cursor);
+
+        let Some(last) = last.pos() else {
+            return;
+        };
+
+        if self.mouse_button == ElementState::Released {
+            return;
+        }
+
+        let offset = position - last;
+        let offset = self.viewport.coords().local_vector(offset);
+
+        match &mut self.scene {
+            CurrentScene::Scene(_) => (),
+            CurrentScene::Image(widget) => {
+                let message = ImageMessage::Pan { offset };
+                widget.update(message);
+            }
+        }
+    }
 }
 
 #[expect(clippy::large_enum_variant)]
@@ -293,16 +324,11 @@ where
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let Some(pos) = cursor.position() else {
+                let Some(local) = self.local_cursor(layout, cursor) else {
                     return;
                 };
 
-                let bounds = self.compute_bounds(layout);
-                let coords = LocalCoords::new(bounds, self.scale_factor);
-                let Some(local) = coords.local_point(pos) else {
-                    return;
-                };
-
+                // TODO: use other types here, iced types should only be consumed
                 let local = iced::Point {
                     x: local.x,
                     y: local.y,
@@ -366,16 +392,10 @@ where
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        let mouse::Cursor::Available(point) = cursor else {
+        let Some(local) = self.local_cursor(layout, cursor) else {
             return mouse::Interaction::None;
         };
         let Some(rect) = self.split_rect(layout) else {
-            return mouse::Interaction::None;
-        };
-
-        let bounds = self.compute_bounds(layout);
-        let coords = LocalCoords::new(bounds, self.scale_factor);
-        let Some(local) = coords.local_point(point) else {
             return mouse::Interaction::None;
         };
 
@@ -384,11 +404,10 @@ where
             y: local.y,
         };
         let inside = rect.contains(local);
-        if inside {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::None
+        if !inside {
+            return mouse::Interaction::None;
         }
+        mouse::Interaction::Pointer
     }
 }
 
@@ -422,6 +441,15 @@ impl PlaceholderWidget<'_> {
             height: coords.size().height as f32,
         })
     }
+
+    fn local_cursor(&self, layout: Layout<'_>, cursor: iced::mouse::Cursor) -> Option<LocalPoint> {
+        let iced::Point { x, y } = cursor.position()?;
+        let point = na::Point2::new(x, y);
+
+        let bounds = self.compute_bounds(layout);
+        let coords = LocalCoords::new(bounds, self.scale_factor);
+        coords.local_point(point)
+    }
 }
 
 fn load_image(path: &Path) -> Option<ImageMemory> {
@@ -432,4 +460,20 @@ fn load_image(path: &Path) -> Option<ImageMemory> {
         }
     }
     None
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CursorState {
+    #[default]
+    Unknown,
+    LastPos(na::Point2<f32>),
+}
+
+impl CursorState {
+    const fn pos(self) -> Option<na::Point2<f32>> {
+        match self {
+            Self::Unknown => None,
+            Self::LastPos(pos) => Some(pos),
+        }
+    }
 }

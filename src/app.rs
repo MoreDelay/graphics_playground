@@ -11,6 +11,7 @@ use iced_winit::conversion::{cursor_position, window_event};
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::{Clipboard, winit};
+use nalgebra as na;
 use tracing::warn;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::EventLoopError;
@@ -118,7 +119,7 @@ impl winit::application::ApplicationHandler for Runner {
             for message in messages {
                 ready
                     .controls
-                    .update(message, &ready.gpu_ctx, &ready.target_ctx, ready.cursor);
+                    .update(&ready.gpu_ctx, &ready.target_ctx, message);
             }
 
             // and request a redraw
@@ -139,7 +140,6 @@ struct Ready {
     // objects used by iced but otherwise unused
     renderer: Renderer,
     events: Vec<Event>,
-    dragging: DraggingState,
     cache: Cache,
     clipboard: Clipboard,
     viewport: Viewport,
@@ -243,7 +243,6 @@ impl Ready {
         let cursor = Cursor::Unavailable;
         let modifiers = ModifiersState::default();
         let events = Vec::new();
-        let dragging = DraggingState::default();
         let cache = Cache::new();
         let resized = false;
 
@@ -256,7 +255,6 @@ impl Ready {
             resized,
             renderer,
             events,
-            dragging,
             cache,
             clipboard,
             viewport,
@@ -265,7 +263,7 @@ impl Ready {
 
     fn redraw(&mut self) {
         if self.resized {
-            self.do_resize();
+            self.reconfigure_surface();
             self.resized = false;
         }
 
@@ -351,7 +349,7 @@ impl Ready {
         frame.present();
     }
 
-    fn do_resize(&mut self) {
+    fn reconfigure_surface(&mut self) {
         let PhysicalSize { width, height } = self.target_ctx.window.inner_size();
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
@@ -361,7 +359,7 @@ impl Ready {
 
         let message = Message::SetScaleFactor(scale_factor);
         self.controls
-            .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
+            .update(&self.gpu_ctx, &self.target_ctx, message);
 
         self.target_ctx
             .surface
@@ -369,30 +367,20 @@ impl Ready {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let after = cursor_position(position, self.target_ctx.window.scale_factor() as f32);
-        let cursor = Cursor::Available(after);
-        let before = std::mem::replace(&mut self.cursor, cursor);
+        let cursor = cursor_position(position, self.target_ctx.window.scale_factor() as f32);
+        self.cursor = Cursor::Available(cursor);
 
-        let Cursor::Available(before) = before else {
-            self.dragging = DraggingState::Released;
-            return;
-        };
-
-        if self.dragging == DraggingState::Dragging {
-            let offset = after - before;
-            let message = Message::Drag(offset);
-
-            self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
-        }
+        let PhysicalPosition { x, y } = position.cast();
+        let position = na::Point2::new(x, y);
+        let message = Message::CursorMoved(position);
+        self.controls
+            .update(&self.gpu_ctx, &self.target_ctx, message);
     }
 
-    const fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
-        match (button, state) {
-            (MouseButton::Left, ElementState::Pressed) => self.dragging = DraggingState::Dragging,
-            (MouseButton::Left, ElementState::Released) => self.dragging = DraggingState::Released,
-            _ => (),
-        }
+    fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
+        let message = Message::MouseInput { button, state };
+        self.controls
+            .update(&self.gpu_ctx, &self.target_ctx, message);
     }
 
     fn scrolled(&mut self, delta: MouseScrollDelta) {
@@ -409,14 +397,14 @@ impl Ready {
         };
         if let Some(message) = message {
             self.controls
-                .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
+                .update(&self.gpu_ctx, &self.target_ctx, message);
         }
     }
 
     fn key_pressed(&mut self, key: SmolStr) {
         let message = Message::KeyPress(key);
         self.controls
-            .update(message, &self.gpu_ctx, &self.target_ctx, self.cursor);
+            .update(&self.gpu_ctx, &self.target_ctx, message);
     }
 
     fn modifiers_changed(&mut self, modifiers: Modifiers) {
@@ -426,11 +414,4 @@ impl Ready {
     const fn resized(&mut self) {
         self.resized = true;
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum DraggingState {
-    #[default]
-    Released,
-    Dragging,
 }

@@ -62,14 +62,12 @@ impl LocalCoords {
         Some(extent)
     }
 
-    pub fn local_vector(&self, vector: iced::Vector) -> LocalVector {
-        let iced::Vector { x, y } = vector;
-        let vector = na::Vector2::new(x, y) / self.scale_factor;
+    #[expect(clippy::unused_self)]
+    pub const fn local_vector(&self, vector: na::Vector2<f32>) -> LocalVector {
         LocalVector::wrap(vector)
     }
 
-    pub fn local_point(&self, point: iced::Point) -> Option<LocalPoint> {
-        let iced::Point { x, y } = point;
+    pub fn local_point(&self, point: na::Point2<f32>) -> Option<LocalPoint> {
         let PhysicalInsets {
             top,
             left,
@@ -77,9 +75,9 @@ impl LocalCoords {
             right,
         } = self.bounds.cast::<f32>();
 
-        let inside = (left <= x && x <= right - 1.) && (top <= y && y <= bottom - 1.);
+        let inside = (left <= point.x && point.x <= right - 1.)
+            && (top <= point.y && point.y <= bottom - 1.);
 
-        let point = na::Point2::new(x, y) / self.scale_factor;
         let point = point - *self.offset();
         inside.then_some(LocalPoint::wrap(point))
     }

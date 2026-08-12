@@ -6,9 +6,9 @@ use std::path::Path;
 use iced::wgpu;
 use iced_wgpu::core::SmolStr;
 use iced_winit::winit::dpi::PhysicalSize;
+use iced_winit::winit::event::ElementState;
 use nalgebra as na;
 
-use crate::app::DraggingState;
 use crate::controls::coords::{LocalPoint, LocalVector};
 use crate::image::filters::GaussFilter;
 use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
@@ -36,7 +36,7 @@ pub struct ImageWidget {
 
     params: DrawParameters,
     split: ComparisonSplit,
-    dragging: DraggingState,
+    dragging: ElementState,
 }
 
 impl ImageWidget {
@@ -51,7 +51,7 @@ impl ImageWidget {
             right: None,
             params: DrawParameters::default(),
             split: ComparisonSplit::default(),
-            dragging: DraggingState::Released,
+            dragging: ElementState::Released,
         }
     }
 
@@ -326,7 +326,7 @@ impl ImageWidget {
 
     fn pan(&mut self, offset: LocalVector) {
         match self.dragging {
-            DraggingState::Released => {
+            ElementState::Released => {
                 self.meta.panned();
                 if let Some(left) = &mut self.left {
                     left.instruments.panned();
@@ -338,7 +338,7 @@ impl ImageWidget {
                 self.params.offset += *offset;
                 self.clamp_offset();
             }
-            DraggingState::Dragging => {
+            ElementState::Pressed => {
                 // only final image is out-of-date
                 self.meta.panned();
 
@@ -396,8 +396,8 @@ impl ImageWidget {
 
     const fn drag_split(&mut self, active: bool) {
         self.dragging = match active {
-            true => DraggingState::Dragging,
-            false => DraggingState::Released,
+            true => ElementState::Pressed,
+            false => ElementState::Released,
         };
     }
 

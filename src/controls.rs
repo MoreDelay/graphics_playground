@@ -140,18 +140,13 @@ impl Controls {
             (_, Message::SetScaleFactor(factor)) => self.viewport.update_scale_factor(factor),
             (_, Message::ModifiersChanged(mods)) => self.modifiers = mods,
             (_, Message::CursorMoved(position)) => self.cursor_moved(position),
+            (_, Message::MouseInput { button, state }) => self.mouse_input(button, state),
             (_, Message::KeyPress(key)) => match key.as_str() {
                 "q" if self.modifiers.control_key() => {
                     return ControlFlow::Break(());
                 }
                 _ => self.key_pressed(&key),
             },
-            (_, Message::MouseInput { button, state }) => {
-                let MouseButton::Left = button else {
-                    return ControlFlow::Break(());
-                };
-                self.mouse_button = state;
-            }
 
             (CurrentScene::Scene(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
@@ -304,6 +299,22 @@ impl Controls {
                 let message = ImageMessage::Pan { offset };
                 widget.update(message);
             }
+        }
+    }
+
+    fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
+        let MouseButton::Left = button else {
+            return;
+        };
+        match state {
+            ElementState::Pressed => {
+                if let Some(pos) = self.cursor.pos()
+                    && self.viewport.coords().local_point(pos).is_some()
+                {
+                    self.mouse_button = state;
+                }
+            }
+            ElementState::Released => self.mouse_button = ElementState::Released,
         }
     }
 }

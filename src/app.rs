@@ -150,6 +150,7 @@ impl Ready {
         // Initialize window with winit
         let mut window = WindowAttributes::default();
         window.min_inner_size = Some(Controls::min_window_size().into());
+        window.title = String::from("Graphics Playground");
         let window = Arc::new(event_loop.create_window(window).expect("Create window"));
 
         // Initialize wgpu

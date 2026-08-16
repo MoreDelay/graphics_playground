@@ -6,7 +6,7 @@ use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced::{Event, Rectangle};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
-use iced_widget::{button, column, row, text};
+use iced_widget::{button, column, container, row, text};
 use iced_winit::conversion::cursor_position;
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets, PhysicalPosition};
@@ -58,6 +58,9 @@ pub struct Controls {
 }
 
 impl Controls {
+    const PANEL_WIDTH: u32 = 150;
+    const MIN_VIEW_SIZE: u32 = 200;
+
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let scene_bounds = Cell::new(None);
         let viewport = Viewport::new();
@@ -80,7 +83,7 @@ impl Controls {
     }
 
     pub fn view(&self, scale_factor: f32) -> Element<'_, Message, Theme, Renderer> {
-        use iced::Length::{Fill, Shrink};
+        use iced::Length::Fill;
 
         self.scene_bounds.set(None);
 
@@ -104,15 +107,21 @@ impl Controls {
 
         row![
             column![
-                text("Hello World").style(text::base),
-                button(text("Switch").center().width(Fill))
+                container(
+                    text("Graphics Playground")
+                        .style(text::base)
+                        .center()
+                        .width(Fill)
+                )
+                .align_top(60.),
+                button(text("Switch Scene").center().width(Fill))
                     .width(Fill)
                     .on_press(Message::SwitchScene),
-                button(text("Pick").center().width(Fill))
+                button(text("Open Image").center().width(Fill))
                     .width(Fill)
                     .on_press(Message::SelectFile)
             ]
-            .width(Shrink)
+            .width(Self::PANEL_WIDTH as f32)
             .padding(5),
             scene
         ]
@@ -187,8 +196,8 @@ impl Controls {
 
     pub const fn min_window_size() -> LogicalSize<u32> {
         LogicalSize {
-            width: 200 + 100,
-            height: 200,
+            width: Self::MIN_VIEW_SIZE + Self::PANEL_WIDTH,
+            height: Self::MIN_VIEW_SIZE,
         }
     }
 

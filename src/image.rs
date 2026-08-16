@@ -55,8 +55,9 @@ impl ImageWidget {
         }
     }
 
-    pub const fn split(&self) -> ComparisonSplit {
-        self.split
+    pub const fn split(&self) -> Option<ComparisonSplit> {
+        let got_two = self.left.is_some() && self.right.is_some();
+        if got_two { Some(self.split) } else { None }
     }
 
     pub fn render(
@@ -258,6 +259,9 @@ impl ImageWidget {
 
         std::mem::swap(&mut self.left, &mut self.right);
         self.left = Some(SingleImageState::new(image));
+
+        let mid = self.params.viewport.width / 2;
+        self.split = ComparisonSplit::Split(mid as f32);
 
         let default = DrawParameters::default();
         self.params = DrawParameters {

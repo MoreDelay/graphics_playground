@@ -92,7 +92,7 @@ impl Controls {
         let bounds = &self.scene_bounds;
         let split = match &self.scene {
             CurrentScene::Scene(_) => None,
-            CurrentScene::Image(image) => Some(image.split()),
+            CurrentScene::Image(image) => image.split(),
         };
         let placeholder = PlaceholderWidget {
             bounds,

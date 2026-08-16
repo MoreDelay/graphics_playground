@@ -20,14 +20,6 @@ use crate::instruments::splitview::draw_splitted;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
-#[derive(Debug, Default, Clone, Copy)]
-pub enum ComparisonSplit {
-    #[default]
-    FullLeft,
-    Split(f32),
-    FullRight,
-}
-
 pub struct ImageWidget {
     meta: ImageMetaInstruments,
 
@@ -36,7 +28,7 @@ pub struct ImageWidget {
 
     params: DrawParameters,
     split: ComparisonSplit,
-    dragging: ElementState,
+    split_dragging: ElementState,
 }
 
 impl ImageWidget {
@@ -51,7 +43,7 @@ impl ImageWidget {
             right: None,
             params: DrawParameters::default(),
             split: ComparisonSplit::default(),
-            dragging: ElementState::Released,
+            split_dragging: ElementState::Released,
         }
     }
 
@@ -101,6 +93,7 @@ impl ImageWidget {
             (Some(left), Some(right)) => {
                 let left = left.instruments.output()?;
                 let right = right.instruments.output()?;
+                let width = params.viewport.width as f32;
                 draw_splitted(
                     passthru,
                     encoder,
@@ -108,7 +101,7 @@ impl ImageWidget {
                     left,
                     right,
                     output.view(),
-                    self.split,
+                    self.split.clamped(width),
                 );
             }
         }
@@ -329,7 +322,7 @@ impl ImageWidget {
     }
 
     fn pan(&mut self, offset: LocalVector) {
-        match self.dragging {
+        match self.split_dragging {
             ElementState::Released => {
                 self.meta.panned();
                 if let Some(left) = &mut self.left {
@@ -355,14 +348,6 @@ impl ImageWidget {
                     ComparisonSplit::Split(pos) => ComparisonSplit::Split(pos + x),
                     ComparisonSplit::FullRight if x < 0. => ComparisonSplit::Split(width + x),
                     last @ (ComparisonSplit::FullLeft | ComparisonSplit::FullRight) => last,
-                };
-                // clamp split to viewport size
-                let next = match next {
-                    ComparisonSplit::Split(pos) if pos <= 0. => ComparisonSplit::FullLeft,
-                    ComparisonSplit::Split(pos) if pos >= width => ComparisonSplit::FullRight,
-                    keep @ (ComparisonSplit::Split(_)
-                    | ComparisonSplit::FullLeft
-                    | ComparisonSplit::FullRight) => keep,
                 };
                 self.split = next;
             }
@@ -399,9 +384,10 @@ impl ImageWidget {
     }
 
     const fn drag_split(&mut self, active: bool) {
-        self.dragging = match active {
-            true => ElementState::Pressed,
-            false => ElementState::Released,
+        let width = self.params.viewport.width as f32;
+        (self.split, self.split_dragging) = match active {
+            true => (self.split.dragged(width), ElementState::Pressed),
+            false => (self.split.clamped(width), ElementState::Released),
         };
     }
 
@@ -433,6 +419,32 @@ impl ImageWidget {
         let y = self.params.offset.y.clamp(y_min, y_max);
 
         self.params.offset = na::Vector2::new(x, y);
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub enum ComparisonSplit {
+    #[default]
+    FullLeft,
+    Split(f32),
+    FullRight,
+}
+
+impl ComparisonSplit {
+    const fn clamped(self, width: f32) -> Self {
+        match self {
+            Self::Split(pos) if pos <= 0. => Self::FullLeft,
+            Self::Split(pos) if pos >= width => Self::FullRight,
+            keep @ (Self::Split(_) | Self::FullLeft | Self::FullRight) => keep,
+        }
+    }
+
+    const fn dragged(self, width: f32) -> Self {
+        match self {
+            Self::FullLeft => Self::Split(0.),
+            Self::Split(s) => Self::Split(s),
+            Self::FullRight => Self::Split(width),
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use iced::wgpu;
 
-use crate::image::ComparisonSplit;
+use crate::image::ClampedSplit;
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
 
@@ -11,7 +11,7 @@ pub fn draw_splitted(
     left: &PassThruTexture,
     right: &PassThruTexture,
     target: &wgpu::TextureView,
-    split: ComparisonSplit,
+    split: ClampedSplit,
 ) {
     let got_size_left = left.texture().size();
     let got_size_right = right.texture().size();
@@ -51,8 +51,8 @@ pub fn draw_splitted(
     };
 
     let (bounds_left, bounds_right) = match split {
-        ComparisonSplit::FullLeft => (None, Some(full)),
-        ComparisonSplit::Split(split) => {
+        ClampedSplit::FullLeft => (None, Some(full)),
+        ClampedSplit::Split(split) => {
             let split = split as u32;
             let left = iced::Rectangle {
                 x: 0,
@@ -69,7 +69,7 @@ pub fn draw_splitted(
             };
             (Some(left), Some(right))
         }
-        ComparisonSplit::FullRight => (Some(full), None),
+        ClampedSplit::FullRight => (Some(full), None),
     };
 
     if let Some(bounds) = bounds_left {

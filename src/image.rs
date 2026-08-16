@@ -6,7 +6,6 @@ use std::path::Path;
 use iced::wgpu;
 use iced_wgpu::core::SmolStr;
 use iced_winit::winit::dpi::PhysicalSize;
-use iced_winit::winit::event::ElementState;
 use nalgebra as na;
 
 use crate::controls::coords::{LocalPoint, LocalVector};
@@ -27,8 +26,7 @@ pub struct ImageWidget {
     right: Option<SingleImageState>,
 
     params: DrawParameters,
-    split: ComparisonSplit,
-    split_dragging: ElementState,
+    split: Split,
 }
 
 impl ImageWidget {
@@ -42,14 +40,18 @@ impl ImageWidget {
             left: None,
             right: None,
             params: DrawParameters::default(),
-            split: ComparisonSplit::default(),
-            split_dragging: ElementState::Released,
+            split: Split::default(),
         }
     }
 
-    pub const fn split(&self) -> Option<ComparisonSplit> {
+    pub const fn split(&self) -> Option<ClampedSplit> {
         let got_two = self.left.is_some() && self.right.is_some();
-        if got_two { Some(self.split) } else { None }
+        let width = self.params.viewport.width as f32;
+        if got_two {
+            Some(self.split.clamped(width))
+        } else {
+            None
+        }
     }
 
     pub fn render(
@@ -254,7 +256,7 @@ impl ImageWidget {
         self.left = Some(SingleImageState::new(image));
 
         let mid = self.params.viewport.width / 2;
-        self.split = ComparisonSplit::Split(mid as f32);
+        self.split = Split::Set(ClampedSplit::Split(mid as f32));
 
         let default = DrawParameters::default();
         self.params = DrawParameters {
@@ -275,10 +277,8 @@ impl ImageWidget {
 
         self.params.viewport = size;
 
-        if let ComparisonSplit::Split(pos) = self.split
-            && pos >= size.width as f32
-        {
-            self.split = ComparisonSplit::FullRight;
+        if let Split::Set(split) = self.split {
+            self.split = Split::Set(split.clamped(size.width as f32));
         }
     }
 
@@ -322,8 +322,8 @@ impl ImageWidget {
     }
 
     fn pan(&mut self, offset: LocalVector) {
-        match self.split_dragging {
-            ElementState::Released => {
+        match self.split {
+            Split::Set(_) => {
                 self.meta.panned();
                 if let Some(left) = &mut self.left {
                     left.instruments.panned();
@@ -335,21 +335,12 @@ impl ImageWidget {
                 self.params.offset += *offset;
                 self.clamp_offset();
             }
-            ElementState::Pressed => {
+            Split::Dragging(pos) => {
                 // only final image is out-of-date
                 self.meta.panned();
 
                 let x = offset.x;
-                let width = self.params.viewport.width as f32;
-
-                // move split according to drag
-                let next = match self.split {
-                    ComparisonSplit::FullLeft if x > 0. => ComparisonSplit::Split(x),
-                    ComparisonSplit::Split(pos) => ComparisonSplit::Split(pos + x),
-                    ComparisonSplit::FullRight if x < 0. => ComparisonSplit::Split(width + x),
-                    last @ (ComparisonSplit::FullLeft | ComparisonSplit::FullRight) => last,
-                };
-                self.split = next;
+                self.split = Split::Dragging(pos + x);
             }
         }
     }
@@ -385,9 +376,9 @@ impl ImageWidget {
 
     const fn drag_split(&mut self, active: bool) {
         let width = self.params.viewport.width as f32;
-        (self.split, self.split_dragging) = match active {
-            true => (self.split.dragged(width), ElementState::Pressed),
-            false => (self.split.clamped(width), ElementState::Released),
+        self.split = match active {
+            true => self.split.dragging(width),
+            false => Split::Set(self.split.clamped(width)),
         };
     }
 
@@ -422,28 +413,60 @@ impl ImageWidget {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Split {
+    Dragging(f32),
+    Set(ClampedSplit),
+}
+
+impl Split {
+    const fn clamped(self, width: f32) -> ClampedSplit {
+        match self {
+            Self::Dragging(pos) => ClampedSplit::new(pos, width),
+            Self::Set(split) => split,
+        }
+    }
+
+    const fn dragging(self, width: f32) -> Self {
+        match self {
+            Self::Dragging(pos) => Self::Dragging(pos),
+            Self::Set(ClampedSplit::FullLeft) => Self::Dragging(0.),
+            Self::Set(ClampedSplit::Split(pos)) => Self::Dragging(pos),
+            Self::Set(ClampedSplit::FullRight) => Self::Dragging(width),
+        }
+    }
+}
+
+impl Default for Split {
+    fn default() -> Self {
+        Self::Set(ClampedSplit::default())
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
-pub enum ComparisonSplit {
+pub enum ClampedSplit {
     #[default]
     FullLeft,
     Split(f32),
     FullRight,
 }
 
-impl ComparisonSplit {
+impl ClampedSplit {
+    const fn new(pos: f32, width: f32) -> Self {
+        if pos <= 0. {
+            Self::FullLeft
+        } else if pos >= width {
+            Self::FullRight
+        } else {
+            Self::Split(pos)
+        }
+    }
+
     const fn clamped(self, width: f32) -> Self {
         match self {
             Self::Split(pos) if pos <= 0. => Self::FullLeft,
             Self::Split(pos) if pos >= width => Self::FullRight,
             keep @ (Self::Split(_) | Self::FullLeft | Self::FullRight) => keep,
-        }
-    }
-
-    const fn dragged(self, width: f32) -> Self {
-        match self {
-            Self::FullLeft => Self::Split(0.),
-            Self::Split(s) => Self::Split(s),
-            Self::FullRight => Self::Split(width),
         }
     }
 }

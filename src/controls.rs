@@ -15,7 +15,7 @@ use iced_winit::winit::keyboard::ModifiersState;
 use nalgebra as na;
 
 use crate::controls::coords::{LocalCoords, LocalPoint};
-use crate::image::{ComparisonSplit, ImageMemory, ImageMessage, ImageWidget};
+use crate::image::{ClampedSplit, ImageMemory, ImageMessage, ImageWidget};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
@@ -350,7 +350,7 @@ impl CurrentScene {
 #[derive(Debug, Clone)]
 pub struct PlaceholderWidget<'a> {
     bounds: &'a Cell<Option<PhysicalInsets<u32>>>,
-    split: Option<ComparisonSplit>,
+    split: Option<ClampedSplit>,
     bg_color: Color,
     scale_factor: f32,
 }
@@ -489,9 +489,9 @@ impl PlaceholderWidget<'_> {
         let bounds = self.compute_bounds(layout);
         let coords = LocalCoords::new(bounds, self.scale_factor);
         let x = match self.split? {
-            ComparisonSplit::FullLeft => 0.,
-            ComparisonSplit::Split(pos) => pos,
-            ComparisonSplit::FullRight => coords.size().width as f32,
+            ClampedSplit::FullLeft => 0.,
+            ClampedSplit::Split(pos) => pos,
+            ClampedSplit::FullRight => coords.size().width as f32,
         };
 
         Some(Rectangle {

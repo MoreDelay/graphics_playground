@@ -118,15 +118,15 @@ impl ImageWidget {
             ImageMessage::ResizedViewport { size } => self.resize_viewport(size),
             ImageMessage::Pan { offset } => self.pan(offset),
             ImageMessage::SetZoom { zoom, cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| LocalPoint::wrap(na::Point2::origin()));
+                let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
                 self.set_zoom(zoom, fixed_point);
             }
             ImageMessage::ZoomIn { cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| LocalPoint::wrap(na::Point2::origin()));
+                let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
                 self.zoom_in(fixed_point);
             }
             ImageMessage::ZoomOut { cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| LocalPoint::wrap(na::Point2::origin()));
+                let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
                 self.zoom_out(fixed_point);
             }
             ImageMessage::ResetPosition => self.reset_pos(),
@@ -315,7 +315,6 @@ impl ImageWidget {
 
         self.params.offset = offset;
         self.params.zoom = zoom;
-        println!("zoom: {zoom}");
 
         // when the image is at the border, it might move out of frame by zooming
         self.clamp_offset();
@@ -410,6 +409,11 @@ impl ImageWidget {
         let y = self.params.offset.y.clamp(y_min, y_max);
 
         self.params.offset = na::Vector2::new(x, y);
+    }
+
+    fn viewport_mid(&self) -> LocalPoint {
+        let PhysicalSize { width, height } = self.params.viewport.cast::<f32>();
+        LocalPoint::wrap(na::Point2::new(width / 2., height / 2.))
     }
 }
 

@@ -40,6 +40,7 @@ pub enum Message {
     DragSplit {
         active: bool,
     },
+    Image(ImageMessage),
 }
 
 pub struct Controls {
@@ -105,27 +106,50 @@ impl Controls {
         };
         let scene = Element::new(placeholder);
 
-        row![
-            column![
-                container(
-                    text("Graphics Playground")
-                        .style(text::base)
-                        .center()
-                        .width(Fill)
-                )
-                .align_top(60.),
-                button(text("Switch Scene").center().width(Fill))
+        let control = column![
+            container(
+                text("Graphics Playground")
+                    .style(text::base)
+                    .center()
                     .width(Fill)
-                    .on_press(Message::SwitchScene),
-                button(text("Open Image").center().width(Fill))
-                    .width(Fill)
-                    .on_press(Message::SelectFile)
-            ]
-            .width(Self::PANEL_WIDTH as f32)
-            .padding(5),
-            scene
+            )
+            .align_top(60.),
+            button(text("Switch Scene").center().width(Fill))
+                .width(Fill)
+                .on_press(Message::SwitchScene),
+            button(text("Open Image").center().width(Fill))
+                .width(Fill)
+                .on_press(Message::SelectFile)
         ]
-        .into()
+        .width(Self::PANEL_WIDTH as f32)
+        .padding(5);
+
+        let control = match &self.scene {
+            CurrentScene::Scene(_) => control,
+            CurrentScene::Image(_) => control
+                .push(iced::widget::space().height(5.))
+                .push(
+                    button(text("Toggle Filter").center().width(Fill))
+                        .padding(5.)
+                        .width(Fill)
+                        .on_press(Message::Image(ImageMessage::CycleFilters)),
+                )
+                .push(
+                    button(text("Reset Pos").center().width(Fill))
+                        .width(Fill)
+                        .on_press(Message::Image(ImageMessage::ResetPosition)),
+                )
+                .push(
+                    button(text("Reset Zoom").center().width(Fill))
+                        .width(Fill)
+                        .on_press(Message::Image(ImageMessage::SetZoom {
+                            cursor: None,
+                            zoom: 1.,
+                        })),
+                ),
+        };
+
+        row![control, scene].into()
     }
 
     // Handle an application-specific event
@@ -167,6 +191,7 @@ impl Controls {
             (CurrentScene::Scene(_), Message::ScrollUp) => (),
             (CurrentScene::Scene(_), Message::ScrollDown) => (),
             (CurrentScene::Scene(_), Message::DragSplit { .. }) => (),
+            (CurrentScene::Scene(_), Message::Image(..)) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
                 self.scene = CurrentScene::scene(ctx, target);
@@ -190,6 +215,7 @@ impl Controls {
                 let message = ImageMessage::DragSplit { active };
                 widget.update(message);
             }
+            (CurrentScene::Image(widget), Message::Image(msg)) => widget.update(msg),
         }
         ControlFlow::Continue(())
     }

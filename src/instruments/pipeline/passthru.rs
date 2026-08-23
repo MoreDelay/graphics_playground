@@ -1,17 +1,28 @@
+//! Contains the Pass-Thru pipeline that acts as a simple copy between textures
+
 use iced::wgpu;
 
 use crate::instruments::GpuContext;
 
+/// A render pipeline that just passes renders a texture to the output unchanged
 pub struct PassThruPipeline {
+    /// The inner render pipeline
     pipeline: wgpu::RenderPipeline,
+    /// The layout for the source texture
     texture_layout: PassThruTextureLayout,
+    /// The color format for the output target
     output_format: wgpu::TextureFormat,
 }
 
 impl PassThruPipeline {
+    /// Pass-thru vertex shader path
     const SHADER_VERTEX_QUAD: &str = "package::image::quad";
+    /// Pass-thru fragment shader path
     const SHADER_FRAGMENT_PASSTHRU: &str = "package::passthru";
 
+    /// Create a new pipeline
+    ///
+    /// When drawing with this, the output target must match the output format.
     pub fn new(ctx: &GpuContext, output_format: wgpu::TextureFormat) -> Self {
         let vs_module = crate::instruments::create_simple_shader_module_desc(
             Some("Quad Shader"),
@@ -73,10 +84,12 @@ impl PassThruPipeline {
         }
     }
 
+    /// Create a new rendering target compatible with this pipeline
     pub fn create_texture(&self, ctx: &GpuContext, size: wgpu::Extent3d) -> PassThruTexture {
         PassThruTexture::new(ctx, &self.texture_layout, size, self.output_format)
     }
 
+    /// Draw a rendering to the target of the same size
     pub fn full_draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -109,9 +122,12 @@ impl PassThruPipeline {
         self.draw(&mut pass, rendering);
     }
 
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, texture: &PassThruTexture) {
+    /// Draw a rendering using the provided pass
+    ///
+    /// Prefer [`Self::full_draw`] when the render pass does not need special handling
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, rendering: &PassThruTexture) {
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, texture.bind(), &[]);
+        pass.set_bind_group(0, rendering.bind(), &[]);
         pass.draw(0..4, 0..1);
     }
 }
@@ -119,12 +135,18 @@ impl PassThruPipeline {
 /// Contains the handles for a texture used with the [`PassThruPipeline`]
 #[derive(Clone)]
 pub struct PassThruTexture {
+    /// The inner texture
     texture: wgpu::Texture,
+    /// A view into this texture
+    ///
+    /// Also used in the binding
     view: wgpu::TextureView,
+    /// The binding of this texture
     bind: wgpu::BindGroup,
 }
 
 impl PassThruTexture {
+    /// Create a new texture
     fn new(
         ctx: &GpuContext,
         layout: &PassThruTextureLayout,
@@ -166,25 +188,32 @@ impl PassThruTexture {
         }
     }
 
+    /// Get a view to this texture
     pub const fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
+    /// Get the bind group for this texture
     pub const fn bind(&self) -> &wgpu::BindGroup {
         &self.bind
     }
 
+    /// Get the inner texture
     pub const fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
 }
 
+/// The bind group layout for a [`PassThruTexture`]
 struct PassThruTextureLayout {
+    /// The inner layout
     layout: wgpu::BindGroupLayout,
+    /// The sampler used in the pass-thru shader
     sampler: wgpu::Sampler,
 }
 
 impl PassThruTextureLayout {
+    /// Create a new layout
     fn new(ctx: &GpuContext) -> Self {
         let layout = ctx
             .device

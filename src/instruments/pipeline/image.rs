@@ -1,3 +1,5 @@
+//! Render Pipelines for the image viewer
+
 use iced::wgpu;
 
 use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
@@ -6,12 +8,16 @@ use crate::instruments::buffer::{SimpleBufferBind, SimpleBufferBindLayout};
 use crate::instruments::pipeline::ImageFilter;
 use crate::instruments::{GpuContext, SHADER_ROOT};
 
+/// Image viewer vertex shader path
 const SHADER_VERTEX_QUAD: &str = "package::image::quad";
+/// Image viewer fragment shader path
 const SHADER_FRAGMENT_RENDER: &str = "package::image::render";
 
+/// Render pipeline for the "nearest" filter
 pub struct RenderNearestPipeline(wgpu::RenderPipeline);
 
 impl RenderNearestPipeline {
+    /// Create a new pipeline
     pub fn new(
         ctx: &GpuContext,
         pipeline_layout: &SimpleImageRenderPipelineLayout,
@@ -29,6 +35,7 @@ impl RenderNearestPipeline {
         Self(pipeline)
     }
 
+    /// Draw the image with this pipeline
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -42,9 +49,11 @@ impl RenderNearestPipeline {
     }
 }
 
+/// Render pipeline for the "bilinear" filter
 pub struct RenderBilinearPipeline(wgpu::RenderPipeline);
 
 impl RenderBilinearPipeline {
+    /// Create a new pipeline
     pub fn new(
         ctx: &GpuContext,
         pipeline_layout: &SimpleImageRenderPipelineLayout,
@@ -62,6 +71,7 @@ impl RenderBilinearPipeline {
         Self(pipeline)
     }
 
+    /// Draw the image with this pipeline
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -75,9 +85,11 @@ impl RenderBilinearPipeline {
     }
 }
 
+/// Render pipeline for the "lanczos" filter
 pub struct RenderLanczosPipeline(wgpu::RenderPipeline);
 
 impl RenderLanczosPipeline {
+    /// Create a new pipeline
     pub fn new(
         ctx: &GpuContext,
         pipeline_layout: &LanczosImageRenderPipelineLayout,
@@ -95,6 +107,7 @@ impl RenderLanczosPipeline {
         Self(pipeline)
     }
 
+    /// Draw the image with this pipeline
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -110,6 +123,10 @@ impl RenderLanczosPipeline {
     }
 }
 
+/// Create an image pipeline
+///
+/// As the creation is very similar, this function handles the creation for all pipelines,
+/// parameterized by the `filter` argument.
 fn image_pipeline(
     ctx: &GpuContext,
     pipeline_layout: &wgpu::PipelineLayout,
@@ -179,9 +196,13 @@ fn image_pipeline(
         })
 }
 
+/// A simple image render pipeline layout
+///
+/// Used by [`RenderNearestPipeline`] and [`RenderBilinearPipeline`].
 pub struct SimpleImageRenderPipelineLayout(wgpu::PipelineLayout);
 
 impl SimpleImageRenderPipelineLayout {
+    /// Create a new layout
     pub fn new(
         ctx: &GpuContext,
         texture_layout: &SimpleTextureLayout,
@@ -206,9 +227,11 @@ impl std::ops::Deref for SimpleImageRenderPipelineLayout {
     }
 }
 
+/// The image render pipeline layout for using the lanczos filter
 pub struct LanczosImageRenderPipelineLayout(wgpu::PipelineLayout);
 
 impl LanczosImageRenderPipelineLayout {
+    /// Create a new layout
     pub fn new(
         ctx: &GpuContext,
         texture_layout: &SimpleTextureLayout,

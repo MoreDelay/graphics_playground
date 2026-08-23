@@ -1,3 +1,5 @@
+//! Instruments for uniform buffers
+
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 
@@ -6,18 +8,24 @@ use iced::wgpu::util::DeviceExt as _;
 
 use crate::instruments::GpuContext;
 
+/// A marker trait for types that can be used as raw data provides for uniform buffers
 pub trait BufferRaw: Copy + Clone + bytemuck::Pod + bytemuck::Zeroable {}
 impl<T> BufferRaw for T where T: Copy + Clone + bytemuck::Pod + bytemuck::Zeroable {}
 
+/// A simple uniform buffer
 pub struct SimpleBuffer<R: BufferRaw> {
+    /// The gpu buffer
     buffer: wgpu::Buffer,
+    /// Marker to associate this buffer with some data provider type
     marker: PhantomData<R>,
 }
 
 impl<R: BufferRaw> SimpleBuffer<R> {
+    /// The number of bytes stored in this buffer
     const SIZE: NonZeroU64 =
         NonZeroU64::new(std::mem::size_of::<R>() as u64).expect("struct not empty");
 
+    /// Create a new buffer
     pub fn new(ctx: &GpuContext, init: R, label: Option<&str>) -> Self {
         let buffer = ctx
             .device
@@ -31,6 +39,7 @@ impl<R: BufferRaw> SimpleBuffer<R> {
         Self { buffer, marker }
     }
 
+    /// Update the contents of this buffer
     pub fn update(&self, ctx: &GpuContext, data: R) {
         ctx.queue
             .write_buffer_with(&self.buffer, 0, Self::SIZE)
@@ -38,17 +47,22 @@ impl<R: BufferRaw> SimpleBuffer<R> {
             .copy_from_slice(bytemuck::cast_slice(&[data]));
     }
 
+    /// Get this buffer as a [`wgpu::BindingResource`]
     pub fn resource(&self) -> wgpu::BindingResource<'_> {
         self.buffer.as_entire_binding()
     }
 }
 
+/// A bind group for a uniform buffer
 pub struct SimpleBufferBind<R: BufferRaw> {
+    /// The buffer used in the binding
     buffer: SimpleBuffer<R>,
+    /// The bind group
     bind: wgpu::BindGroup,
 }
 
 impl<R: BufferRaw> SimpleBufferBind<R> {
+    /// Create a new binding
     pub fn new(
         ctx: &GpuContext,
         buffer: SimpleBuffer<R>,
@@ -66,6 +80,7 @@ impl<R: BufferRaw> SimpleBufferBind<R> {
         Self { buffer, bind }
     }
 
+    /// Access the buffer of this binding
     pub const fn buffer(&self) -> &SimpleBuffer<R> {
         &self.buffer
     }
@@ -79,9 +94,11 @@ impl<R: BufferRaw> std::ops::Deref for SimpleBufferBind<R> {
     }
 }
 
+/// The layout for [`SimpleBufferBind`]
 pub struct SimpleBufferBindLayout(wgpu::BindGroupLayout);
 
 impl SimpleBufferBindLayout {
+    /// Create a new layout
     pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
         let layout = ctx
             .device

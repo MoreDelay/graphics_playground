@@ -1,3 +1,5 @@
+//! Instruments for the mipmap creation
+
 use core::f32;
 
 use iced::wgpu;
@@ -17,16 +19,19 @@ use crate::instruments::pipeline::filter::{
 };
 use crate::instruments::pipeline::halfing::{HalfingPipeline, HalfingPipelineLayout};
 
+/// The machinery to make mipmaps
 pub struct MipMapper {
+    /// Pipeline for halfing an image
     halfing: HalfingPipeline,
+    /// Pipeline to apply the blur kernel
     convolution: ConvolutionPipeline,
 
+    /// Texture layout during bluring
     storage_layout: StorageSrcDstLayout,
-    #[expect(unused)]
-    kernel_layout: KernelLayout,
 }
 
 impl MipMapper {
+    /// Create a new mipmap creation machine
     pub fn new(ctx: &GpuContext) -> Self {
         let storage_layout =
             StorageSrcDstLayout::new(ctx, Some("MipMapper Storage Texture Layout"));
@@ -39,10 +44,10 @@ impl MipMapper {
             halfing,
             convolution,
             storage_layout,
-            kernel_layout,
         }
     }
 
+    /// Create the mipmaps for a given texture
     pub fn compute_mipmaps(&self, ctx: &GpuContext, texture: &wgpu::Texture) {
         assert!(
             texture.format().is_srgb(),
@@ -55,6 +60,7 @@ impl MipMapper {
         runner.run(ctx);
     }
 
+    /// Create the halfing pipeline
     fn create_pipeline_halfing(
         ctx: &GpuContext,
         storage_layout: &StorageSrcDstLayout,
@@ -72,6 +78,7 @@ impl MipMapper {
         )
     }
 
+    /// Create the blur convolution pipeline
     fn create_pipeline_convolution(
         ctx: &GpuContext,
         storage_layout: &StorageSrcDstLayout,
@@ -92,17 +99,26 @@ impl MipMapper {
     }
 }
 
+/// Ephemeral helper to execute a mipmap creation run
 struct MipMapRunner<'a> {
+    /// The original [`MipMapper`] that created this runner
     mip_mapper: &'a MipMapper,
+    /// The texture for which to create the mipmap
     texture: &'a wgpu::Texture,
+    /// The copy machine to handle storage textures
     copy_helper: StorageTextureCopyMachine,
+    /// Storage texture holding the 1d blurred image mipmap tree
     texture_filtered_1d: SimpleStorageTexture,
+    /// Storage texture holding the 2d blurred image mipmap tree
     texture_filtered_2d: SimpleStorageTexture,
+    /// Storage texture holding the downsampled image mipmap tree
     texture_downsampled: SimpleStorageTexture,
+    /// The blur kernel binding
     kernel_bind: KernelBinding,
 }
 
 impl<'a> MipMapRunner<'a> {
+    /// Create a new runner
     fn new(
         ctx: &GpuContext,
         mip_mapper: &'a MipMapper,
@@ -148,6 +164,7 @@ impl<'a> MipMapRunner<'a> {
         })
     }
 
+    /// Execute the mipmap creation
     fn run(self, ctx: &GpuContext) {
         let mut encoder = ctx
             .device

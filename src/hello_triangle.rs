@@ -1,3 +1,5 @@
+//! Renders the Hello World triangle
+
 use iced_wgpu::wgpu;
 use iced_winit::core::Color;
 
@@ -5,52 +7,36 @@ use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
-pub struct RenderWidget {
+/// A widget to display the Hello World triangle
+pub struct HelloWidget {
+    /// The render pipeline
     pipeline: wgpu::RenderPipeline,
-    bg_color: Color,
+    /// The rendering output texture
     render_output: Option<PassThruTexture>,
 }
 
-impl RenderWidget {
+impl HelloWidget {
+    /// The triangle vertex shader path
     const SHADER_VERTEX: &str = "package::triangle::vert";
+    /// The triangle fragment shader path
     const SHADER_FRAGMENT: &str = "package::triangle::frag";
 
+    /// Create a new Hello Triangle widget
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let pipeline = Self::build_pipeline(ctx, target);
-        let bg_color = Color::BLACK;
         let render_output = None;
         Self {
             pipeline,
-            bg_color,
             render_output,
         }
     }
 
-    pub const fn bg_color(&self) -> Color {
-        self.bg_color
+    /// Get the background color
+    pub const fn bg_color() -> Color {
+        Color::BLACK
     }
 
-    pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, output: &PassThruTexture) {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Main Scene Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output.view(),
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.draw(0..3, 0..1);
-    }
-
+    /// Get the latest rendering output
     pub fn render(
         &mut self,
         ctx: &GpuContext,
@@ -76,6 +62,29 @@ impl RenderWidget {
         self.render_output.as_ref()
     }
 
+    /// Draw the triangle to the specified output texture
+    fn draw(&self, encoder: &mut wgpu::CommandEncoder, output: &PassThruTexture) {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Triangle Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output.view(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.draw(0..3, 0..1);
+    }
+
+    /// Create the render pipeline of this widget
     fn build_pipeline(ctx: &GpuContext, target: &TargetContext) -> wgpu::RenderPipeline {
         let vs_module = crate::instruments::create_simple_shader_module_desc(
             Some("Triangle Vertex Shader"),
@@ -91,14 +100,14 @@ impl RenderWidget {
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Scene Render Pipeline Layout"),
+                label: Some("Triangle Render Pipeline Layout"),
                 push_constant_ranges: &[],
                 bind_group_layouts: &[],
             });
 
         ctx.device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Scene Render Pipeline"),
+                label: Some("Triangle Render Pipeline"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &vs_module,

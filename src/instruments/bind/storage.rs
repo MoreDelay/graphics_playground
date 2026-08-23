@@ -1,14 +1,20 @@
+//! Instruments concerning storage textures
+
 use std::range::Range;
 
 use iced::wgpu;
 
 use crate::instruments::GpuContext;
+use crate::instruments::bind::texture::SimpleTextureLayout;
 
+/// The default storage texture color format
 pub const FORMAT_STORAGE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// A texture that can be used as storage texture
 pub struct SimpleStorageTexture(wgpu::Texture);
 
 impl SimpleStorageTexture {
+    /// Create an empty storage texture
     pub fn empty(ctx: &GpuContext, base: &wgpu::Texture, label: Option<&str>) -> Self {
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label,
@@ -27,6 +33,7 @@ impl SimpleStorageTexture {
         Self(texture)
     }
 
+    /// Copy the contents stored from this storage texture over to a normal texture
     pub fn copy_to_texture(
         &self,
         ctx: &GpuContext,
@@ -36,10 +43,11 @@ impl SimpleStorageTexture {
         mip_range: Range<u32>,
     ) {
         for mip_level in mip_range {
-            machine.to_texture(ctx, encoder, &self.0, dst, mip_level);
+            machine.to_texture(ctx, encoder, self, dst, mip_level);
         }
     }
 
+    /// Copy the contents from a normal texture into this storage texture
     pub fn copy_from_texture(
         &self,
         ctx: &GpuContext,
@@ -49,10 +57,11 @@ impl SimpleStorageTexture {
         mip_range: Range<u32>,
     ) {
         for mip_level in mip_range {
-            machine.to_storage(ctx, encoder, src, &self.0, mip_level);
+            machine.to_storage(ctx, encoder, src, self, mip_level);
         }
     }
 
+    /// Get the inner texture
     #[expect(dead_code)]
     pub const fn texture(&self) -> &wgpu::Texture {
         &self.0
@@ -67,9 +76,11 @@ impl std::ops::Deref for SimpleStorageTexture {
     }
 }
 
+/// A bind group layout for accessing two storage textures in a shader
 pub struct StorageSrcDstLayout(wgpu::BindGroupLayout);
 
 impl StorageSrcDstLayout {
+    /// Create a new layout
     pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
         let bind = ctx
             .device
@@ -110,18 +121,32 @@ impl std::ops::Deref for StorageSrcDstLayout {
     }
 }
 
+/// Handles the copying between a normal and a storage texture
+///
+/// Because a storage texture can not use sRGB colors, and a direct copy of data does not perform
+/// the any color space transformations, we need to use a full render pass to copy the color
+/// correctly (while staying on the GPU). This struct contains all the necessary machinery to do
+/// these simple renderings.
 pub struct StorageTextureCopyMachine {
-    texture_layout: wgpu::BindGroupLayout,
+    /// The texture layout for the source
+    texture_layout: SimpleTextureLayout,
+    /// Pipeline to copy from texture to storage
     texture_to_storage: wgpu::RenderPipeline,
+    /// Pipeline to copy from storage to texture
     storage_to_texture: wgpu::RenderPipeline,
 }
 
 impl StorageTextureCopyMachine {
+    /// The copy machine vertex shader path
     const SHADER_COPY_VERTEX: &str = "package::image::quad";
+    /// The copy machine fragment shader path
     const SHADER_COPY_FRAGMENT: &str = "package::mipmap::texture_copy";
 
+    /// Create a new copy machine
+    ///
+    /// The original texture format limits the texture format that are compatible with this machine
     pub fn new(ctx: &GpuContext, original_format: wgpu::TextureFormat) -> Self {
-        let texture_layout = Self::create_texture_layout(ctx);
+        let texture_layout = SimpleTextureLayout::new(ctx, Some("Copy Pipeline Texture Layout"));
         let (texture_to_storage, storage_to_texture) =
             Self::create_copy_pipelines(ctx, &texture_layout, original_format);
 
@@ -132,23 +157,25 @@ impl StorageTextureCopyMachine {
         }
     }
 
+    /// Copy from a normal texture to a storage texture
     pub fn to_storage(
         &self,
         ctx: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
         src: &wgpu::Texture,
-        dst: &wgpu::Texture,
+        dst: &SimpleStorageTexture,
         mip_level: u32,
     ) {
         assert_eq!(src.size(), dst.size(), "copy only when sizes equal");
         self.run_internal(ctx, encoder, src, dst, mip_level, &self.texture_to_storage);
     }
 
+    /// Copy from a storage texture to a normal texture
     pub fn to_texture(
         &self,
         ctx: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
-        src: &wgpu::Texture,
+        src: &SimpleStorageTexture,
         dst: &wgpu::Texture,
         mip_level: u32,
     ) {
@@ -156,6 +183,7 @@ impl StorageTextureCopyMachine {
         self.run_internal(ctx, encoder, src, dst, mip_level, &self.storage_to_texture);
     }
 
+    /// Internal command that implements the copy rendering
     fn run_internal(
         &self,
         ctx: &GpuContext,
@@ -209,23 +237,7 @@ impl StorageTextureCopyMachine {
         pass.draw(0..4, 0..1);
     }
 
-    fn create_texture_layout(ctx: &GpuContext) -> wgpu::BindGroupLayout {
-        ctx.device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Copy Pipeline Texture Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                }],
-            })
-    }
-
+    /// Create the internal pipelines of this machine
     fn create_copy_pipelines(
         ctx: &GpuContext,
         texture_layout: &wgpu::BindGroupLayout,

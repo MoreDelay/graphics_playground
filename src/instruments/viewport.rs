@@ -1,47 +1,59 @@
+//! Handling of rendering to a specified viewport within the window
+
 use iced::wgpu;
 use iced_winit::winit::dpi::{PhysicalInsets, PhysicalSize};
 
 use crate::controls::coords::LocalCoords;
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 
+/// A region on the window to which a widget's content is rendered to
 pub struct Viewport {
+    /// The local coordinate system of the viewport
     coords: LocalCoords,
 }
 
 impl Viewport {
+    /// Create a new viewport with no size
     pub fn new() -> Self {
         let coords = LocalCoords::default();
         Self { coords }
     }
 
+    /// Update to a new local coordinate system
     pub fn update_coords(&mut self, coords: LocalCoords) -> bool {
         let equal = self.coords == coords;
         self.coords = coords;
         !equal
     }
 
+    /// Resize the local coordinates
     pub fn update_bounds(&mut self, bounds: PhysicalInsets<u32>) -> bool {
         let coords = self.coords.resized(bounds);
         self.update_coords(coords)
     }
 
+    /// Change the scale factor
     pub fn update_scale_factor(&mut self, scale_factor: f32) {
         let coords = self.coords.scale_changed(scale_factor);
         self.update_coords(coords);
     }
 
+    /// Get access to the local coordinate transform
     pub const fn coords(&self) -> LocalCoords {
         self.coords
     }
 
+    /// Get the size of this viewport
     pub const fn size(&self) -> PhysicalSize<u32> {
         self.coords.size()
     }
 
+    /// Get the size of this viewport to be used with wgpu
     pub const fn extent(&self) -> Option<wgpu::Extent3d> {
         self.coords.extent()
     }
 
+    /// Draw to this viewport
     pub fn draw(
         &self,
         passthru: &PassThruPipeline,

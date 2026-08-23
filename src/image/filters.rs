@@ -1,11 +1,17 @@
+//! Module to create filter kernel weights
+
 use std::num::NonZeroUsize;
 
+/// A representation of a gaussian filter kernel
 pub struct GaussFilter {
+    /// The standard deviation of the gaussian
     sigma: f32,
+    /// The number of values to create on each side of the peak
     radius: NonZeroUsize,
 }
 
 impl GaussFilter {
+    /// Create a new kernel representation
     pub fn new(sigma: f32) -> Option<Self> {
         if sigma <= 0. {
             return None;
@@ -16,6 +22,7 @@ impl GaussFilter {
         Some(Self { sigma, radius })
     }
 
+    /// Create the kernel weights
     pub fn blur_kernel(&self) -> Vec<f32> {
         let &Self { sigma, radius } = self;
         let radius = radius.get();

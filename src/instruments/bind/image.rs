@@ -1,3 +1,6 @@
+//! Bind groups related to image rendering
+
+/// Raw image metadata for shaders
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ImageMetadataRaw {
@@ -9,6 +12,7 @@ pub struct ImageMetadataRaw {
     pub _pad: u32,
 }
 
+/// Raw lanczos metadata for shaders
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LanczosInfoRaw {

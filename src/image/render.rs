@@ -1,3 +1,5 @@
+//! Orchestration to render the image viewer widget
+
 use std::range::Range;
 
 use iced::wgpu;
@@ -28,35 +30,53 @@ use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
 
+/// The rendering instruments independent of any concrete image
 #[derive(Default)]
 pub struct ImageMetaInstruments {
+    /// The current complete rendering
     final_output: Use<PassThruTexture>,
 
+    /// The storage layout used during bluring
     storage_layout: Use<StorageSrcDstLayout>,
+    /// The blur kernel layout
     kernel_layout: Use<KernelLayout>,
+    /// The convolution pipeline layout for blurring
     convolution_layout: Use<ConvolutionPipelineLayout>,
+    /// The convolution pipeline for blurring
     convolution_pipeline: Use<ConvolutionPipeline>,
+    /// The copy machine used during bluring
     copy_machine: Use<StorageTextureCopyMachine>,
 
+    /// The universal texture layout
     texture_layout: Use<SimpleTextureLayout>,
+    /// The universal buffer bind group layout
     buffer_layout: Use<SimpleBufferBindLayout>,
 
+    /// The simple pipeline layout
     simple_pipeline_layout: Use<SimpleImageRenderPipelineLayout>,
+    /// The lanczos pipeline layout
     lanczos_pipeline_layout: Use<LanczosImageRenderPipelineLayout>,
+    /// The pipeline to render with "nearest" filter
     nearest_pipeline: Use<RenderNearestPipeline>,
+    /// The pipeline to render with "bilinear" filter
     bilinear_pipeline: Use<RenderBilinearPipeline>,
+    /// The pipeline to render with "lanczos" filter
     lanczos_pipeline: Use<RenderLanczosPipeline>,
 
+    /// The buffer for image metadata used in all render pipelines
     meta_buffer: Use<SimpleBufferBind<ImageMetadataRaw>>,
+    /// The buffer for lanczos filter metadata
     lanczos_buffer: Use<SimpleBufferBind<LanczosInfoRaw>>,
 }
 
 /// Public API
 impl ImageMetaInstruments {
+    /// Create a new set of meta image instruments
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Get the current final output
     pub const fn final_output(&self) -> Option<&PassThruTexture> {
         let Use::Active(output) = &self.final_output else {
             return None;
@@ -64,11 +84,13 @@ impl ImageMetaInstruments {
         Some(output)
     }
 
+    /// Update the current final output with a new result
     pub fn set_final_output(&mut self, output: PassThruTexture) -> &PassThruTexture {
         self.final_output = Use::Active(output);
         self.final_output.active()
     }
 
+    /// Render a new image with the provided [`ImageDataInstruments`] using "nearest" filter
     #[expect(clippy::too_many_arguments)]
     pub fn nearest(
         &mut self,
@@ -114,6 +136,7 @@ impl ImageMetaInstruments {
         data.output = Use::Active(output);
     }
 
+    /// Render a new image with the provided [`ImageDataInstruments`] using "bilinear" filter
     #[expect(clippy::too_many_arguments)]
     pub fn bilinear(
         &mut self,
@@ -159,6 +182,7 @@ impl ImageMetaInstruments {
         data.output = Use::Active(output);
     }
 
+    /// Render a new image with the provided [`ImageDataInstruments`] using "lanczos" filter
     #[expect(clippy::too_many_arguments)]
     pub fn lanczos(
         &mut self,
@@ -216,6 +240,7 @@ impl ImageMetaInstruments {
 
 /// Instrumentalization
 impl ImageMetaInstruments {
+    /// Extract or create the render target for the widget
     pub fn create_output(
         &mut self,
         ctx: &GpuContext,
@@ -241,6 +266,7 @@ impl ImageMetaInstruments {
         }
     }
 
+    /// Make sure the texture layout is available
     fn create_texture_layout(&mut self, ctx: &GpuContext) {
         if self.texture_layout.checked() {
             return;
@@ -250,6 +276,7 @@ impl ImageMetaInstruments {
         self.texture_layout = Use::Active(out);
     }
 
+    /// Make sure the buffer layout is available
     fn create_buffer_layout(&mut self, ctx: &GpuContext) {
         if self.buffer_layout.checked() {
             return;
@@ -258,6 +285,7 @@ impl ImageMetaInstruments {
         self.buffer_layout = Use::Active(out);
     }
 
+    /// Make sure the simple pipeline layout is available
     fn create_simple_pipeline_layout(&mut self, ctx: &GpuContext) {
         if self.simple_pipeline_layout.checked() {
             return;
@@ -273,6 +301,7 @@ impl ImageMetaInstruments {
         self.simple_pipeline_layout = Use::Active(pipeline);
     }
 
+    /// Make sure the pipeline for the "nearest" filter is available
     fn create_nearest_pipeline(&mut self, ctx: &GpuContext, target: &TargetContext) {
         if self.nearest_pipeline.checked() {
             return;
@@ -285,6 +314,7 @@ impl ImageMetaInstruments {
         self.nearest_pipeline = Use::Active(pipeline);
     }
 
+    /// Make sure the pipeline for the "bilinear" filter is available
     fn create_bilinear_pipeline(&mut self, ctx: &GpuContext, target: &TargetContext) {
         if self.bilinear_pipeline.checked() {
             return;
@@ -297,6 +327,7 @@ impl ImageMetaInstruments {
         self.bilinear_pipeline = Use::Active(pipeline);
     }
 
+    /// Make sure image metadata buffer is available
     fn create_meta_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
         match self.meta_buffer.take() {
             Use::Missing => {
@@ -324,6 +355,7 @@ impl ImageMetaInstruments {
         }
     }
 
+    /// Make sure the original image has been uploaded to a texture
     fn create_original(
         &mut self,
         data: &mut ImageDataInstruments,
@@ -346,6 +378,7 @@ impl ImageMetaInstruments {
         data.original = Use::Active(original);
     }
 
+    /// Make sure the kernel layout is available
     fn create_kernel_layout(&mut self, ctx: &GpuContext) {
         if self.kernel_layout.checked() {
             return;
@@ -354,6 +387,7 @@ impl ImageMetaInstruments {
         self.kernel_layout = Use::Active(KernelLayout::new(ctx, Some("Image Kernel Layout")));
     }
 
+    /// Make sure the blur filter kernel is available
     fn create_kernel_bind(
         &mut self,
         data: &mut ImageDataInstruments,
@@ -379,6 +413,7 @@ impl ImageMetaInstruments {
         };
     }
 
+    /// Make sure the storage layout is available
     fn create_storage_layout(&mut self, ctx: &GpuContext) {
         if self.storage_layout.checked() {
             return;
@@ -390,6 +425,7 @@ impl ImageMetaInstruments {
         ));
     }
 
+    /// Make sure the convolution layout is available
     fn create_convolution_layout(&mut self, ctx: &GpuContext) {
         if self.convolution_layout.checked() {
             return;
@@ -409,6 +445,7 @@ impl ImageMetaInstruments {
         self.convolution_layout = Use::Active(convolution);
     }
 
+    /// Make sure the convolution pipeline is available
     fn create_convolution_pipeline(&mut self, ctx: &GpuContext) {
         if self.convolution_pipeline.checked() {
             return;
@@ -425,6 +462,7 @@ impl ImageMetaInstruments {
         self.convolution_pipeline = Use::Active(convolution);
     }
 
+    /// Make sure the storage texture copy machine is available
     fn create_copy_machine(
         &mut self,
         data: &mut ImageDataInstruments,
@@ -442,6 +480,7 @@ impl ImageMetaInstruments {
         self.copy_machine = Use::Active(copy_machine);
     }
 
+    /// Make sure the storage data texture is available
     fn create_storage_data(
         &mut self,
         data: &mut ImageDataInstruments,
@@ -463,6 +502,7 @@ impl ImageMetaInstruments {
         data.storage_data = Use::Active(storage);
     }
 
+    /// Make sure the storage scratch texture is available
     fn create_storage_scratch(
         &mut self,
         data: &mut ImageDataInstruments,
@@ -484,6 +524,7 @@ impl ImageMetaInstruments {
         data.storage_scratch = Use::Active(storage);
     }
 
+    /// Make sure the lanczos metadata buffer is available
     fn create_lanczos_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
         match self.lanczos_buffer.take() {
             Use::Missing => {
@@ -506,6 +547,7 @@ impl ImageMetaInstruments {
         }
     }
 
+    /// Make sure the lanczos pipeline layout is available
     fn create_lanczos_pipeline_layout(&mut self, ctx: &GpuContext) {
         if self.lanczos_pipeline_layout.checked() {
             return;
@@ -520,6 +562,7 @@ impl ImageMetaInstruments {
         self.lanczos_pipeline_layout = Use::Active(pipeline);
     }
 
+    /// Make sure the lanczos pipeline is available
     fn create_lanczos_pipeline(&mut self, ctx: &GpuContext, target: &TargetContext) {
         if self.lanczos_pipeline.checked() {
             return;
@@ -532,6 +575,7 @@ impl ImageMetaInstruments {
         self.lanczos_pipeline = Use::Active(pipeline);
     }
 
+    /// Make sure the blurred image is available
     fn create_blurred(
         &mut self,
         data: &mut ImageDataInstruments,
@@ -625,51 +669,35 @@ impl ImageMetaInstruments {
 /// Results and state changes
 impl ImageMetaInstruments {
     #[expect(dead_code)]
+    /// Move out all values out this object
     pub fn take(&mut self) -> Self {
         std::mem::take(self)
     }
 
-    pub fn uncheck_all(&mut self) {
-        self.final_output.uncheck();
-
-        self.storage_layout.uncheck();
-        self.kernel_layout.uncheck();
-        self.convolution_layout.uncheck();
-        self.convolution_pipeline.uncheck();
-        self.copy_machine.uncheck();
-
-        self.texture_layout.uncheck();
-        self.buffer_layout.uncheck();
-
-        self.simple_pipeline_layout.uncheck();
-        self.lanczos_pipeline_layout.uncheck();
-        self.nearest_pipeline.uncheck();
-        self.bilinear_pipeline.uncheck();
-        self.lanczos_pipeline.uncheck();
-
-        self.meta_buffer.uncheck();
-        self.lanczos_buffer.uncheck();
-    }
-
+    /// Degrade necessary instruments to handle a replaced image
     pub fn replaced_image(&mut self) {
         self.final_output.degrade();
         self.meta_buffer.degrade();
     }
 
+    /// Degrade necessary instruments to handle a resized viewport
     pub fn resized(&mut self) {
         self.final_output.degrade();
     }
 
+    /// Degrade necessary instruments to handle a new zoom level
     pub fn zoomed(&mut self) {
         self.final_output.degrade();
         self.meta_buffer.degrade();
     }
 
+    /// Degrade necessary instruments to handle a panned image
     pub fn panned(&mut self) {
         self.final_output.degrade();
         self.meta_buffer.degrade();
     }
 
+    /// Degrade necessary instruments to handle a new applied filter
     pub fn cycled_filter(&mut self) {
         self.final_output.degrade();
 
@@ -688,28 +716,35 @@ impl ImageMetaInstruments {
         self.bilinear_pipeline.discard();
         self.lanczos_pipeline.discard();
 
-        self.meta_buffer.keep();
         self.lanczos_buffer.discard();
     }
 }
 
+/// The rendering instruments for a concrete image
 #[derive(Default)]
 pub struct ImageDataInstruments {
+    /// The current filtered result of this image
     output: Use<PassThruTexture>,
+    /// The original image as a texture
     original: Use<SimpleTexture>,
-    params: Use<DrawParameters>,
 
+    /// Storage data texture that fits the image
     storage_data: Use<SimpleStorageTexture>,
+    /// Storage scratch texture that fits the image
     storage_scratch: Use<SimpleStorageTexture>,
+    /// The blur kernel binding for this texture
     kernel_bind: Use<KernelBinding>,
+    /// The blurred image
     blurred: Use<SimpleTexture>,
 }
 
 impl ImageDataInstruments {
+    /// Create empty instruments
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Get the current filtered rendering result
     pub const fn output(&self) -> Option<&PassThruTexture> {
         let Use::Active(output) = &self.output else {
             return None;
@@ -717,17 +752,7 @@ impl ImageDataInstruments {
         Some(output)
     }
 
-    pub fn uncheck_all(&mut self) {
-        self.output.uncheck();
-        self.original.uncheck();
-        self.params.uncheck();
-
-        self.storage_data.uncheck();
-        self.storage_scratch.uncheck();
-        self.kernel_bind.uncheck();
-        self.blurred.uncheck();
-    }
-
+    /// Degrade necessary instruments to handle a replaced image
     pub fn replaced_image(&mut self) {
         self.original.degrade();
         self.output.degrade();
@@ -735,6 +760,7 @@ impl ImageDataInstruments {
         self.storage_data.degrade();
     }
 
+    /// Degrade necessary instruments to handle a resized viewport
     pub fn resized(&mut self) {
         self.output.discard();
         self.storage_data.discard();
@@ -742,20 +768,21 @@ impl ImageDataInstruments {
         self.blurred.discard();
     }
 
+    /// Degrade necessary instruments to handle a new zoom level
     pub fn zoomed(&mut self) {
         self.output.degrade();
         self.blurred.discard();
         self.kernel_bind.discard();
     }
 
+    /// Degrade necessary instruments to handle a panned image
     pub fn panned(&mut self) {
         self.output.degrade();
     }
 
+    /// Degrade necessary instruments to handle a new applied filter
     pub fn cycled_filter(&mut self) {
         self.output.degrade();
-        self.original.keep();
-        self.params.keep();
 
         self.storage_data.discard();
         self.storage_scratch.discard();
@@ -763,6 +790,7 @@ impl ImageDataInstruments {
         self.blurred.discard();
     }
 
+    /// Extract or create the render target for this image
     fn create_output(
         &mut self,
         ctx: &GpuContext,
@@ -789,6 +817,7 @@ impl ImageDataInstruments {
     }
 }
 
+/// Marker enum to handle instrument reuse
 #[derive(Default)]
 enum Use<T> {
     /// Unchecked and unavailable
@@ -801,26 +830,23 @@ enum Use<T> {
     /// Unchecked but available
     Recycle(T),
     /// Checked and available but unused
+    ///
+    /// This allows it to get recycled when it needs to be used again
     Unused(T),
 }
 
 impl<T> Use<T> {
+    /// Move out the stored object
     fn take(&mut self) -> Self {
         std::mem::take(self)
     }
 
+    /// Test if this object has been checked during this draw call
     const fn checked(&self) -> bool {
-        matches!(self, Self::Active(_) | Self::Unused(_))
+        matches!(self, Self::Invalid | Self::Active(_) | Self::Unused(_))
     }
 
-    fn uncheck(&mut self) {
-        *self = match self.take() {
-            Self::Missing | Self::Invalid => Self::Missing,
-            Self::Active(v) => Self::Active(v),
-            Self::Recycle(v) | Self::Unused(v) => Self::Recycle(v),
-        }
-    }
-
+    /// Assert this object is active and get a reference
     fn active(&self) -> &T {
         let Self::Active(v) = self else {
             panic!("value is not in active use");
@@ -828,6 +854,7 @@ impl<T> Use<T> {
         v
     }
 
+    /// Assert this object was checked and get the checked result
     fn maybe_active(&self) -> Option<&T> {
         match self {
             Self::Missing | Self::Recycle(_) => panic!("value still unchecked"),
@@ -836,27 +863,30 @@ impl<T> Use<T> {
         }
     }
 
+    /// Mark the current object as unchecked for the current drawing pass
     fn degrade(&mut self) {
         *self = match self.take() {
+            Self::Missing => Self::Missing,
+            Self::Invalid => Self::Missing,
+            Self::Active(v) => Self::Recycle(v),
+            Self::Recycle(v) => Self::Recycle(v),
+            Self::Unused(v) => Self::Recycle(v),
+        }
+    }
+
+    /// Drop the current object, making it missing
+    fn discard(&mut self) {
+        *self = Self::Missing;
+    }
+
+    /// Mark this object checked but unused
+    fn make_unused(self) -> Self {
+        match self {
             Self::Missing => Self::Invalid,
             Self::Invalid => Self::Invalid,
             Self::Active(v) => Self::Unused(v),
             Self::Recycle(v) => Self::Unused(v),
             Self::Unused(v) => Self::Unused(v),
-        }
-    }
-
-    fn discard(&mut self) {
-        *self = Self::Missing;
-    }
-
-    #[expect(clippy::unused_self)]
-    const fn keep(&self) {}
-
-    fn make_unused(self) -> Self {
-        match self {
-            Self::Missing | Self::Invalid => Self::Invalid,
-            Self::Active(v) | Self::Recycle(v) | Self::Unused(v) => Self::Unused(v),
         }
     }
 }

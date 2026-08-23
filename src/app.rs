@@ -1,3 +1,5 @@
+//! Contains the app's entry point and state struct
+
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,7 +25,8 @@ use winit::window::WindowAttributes;
 use crate::controls::{Controls, Message};
 use crate::instruments::{GpuContext, TargetContext};
 
-pub fn run_app() -> Result<(), EventLoopError> {
+/// The entry point to run the app
+pub fn run() -> Result<(), EventLoopError> {
     // Initialize winit
     let event_loop = EventLoop::new()?;
 
@@ -31,9 +34,12 @@ pub fn run_app() -> Result<(), EventLoopError> {
     event_loop.run_app(&mut runner)
 }
 
+/// The app state
 #[expect(clippy::large_enum_variant)]
 enum Runner {
+    /// No state yet, probably because we are still loading
     Loading,
+    /// The window and render context has been initialized
     Ready(Ready),
 }
 
@@ -130,22 +136,35 @@ impl winit::application::ApplicationHandler for Runner {
     }
 }
 
+/// Struct to hold all window and rendering state
 struct Ready {
     // context objects
+    /// Our gpu context
     gpu_ctx: GpuContext,
+    /// Our gpu window target context
     target_ctx: TargetContext,
+
     // state of gui
+    /// The controller of the app
     controls: Controls,
+    /// Whether we need to update render state due to a resize
     resized: bool,
+
     // objects used by iced but otherwise unused
+    /// Iced renderer
     renderer: Renderer,
+    /// Iced events
     events: Vec<Event>,
+    /// Iced cache
     cache: Cache,
+    /// Iced clipboard
     clipboard: Clipboard,
+    /// Iced viewport
     viewport: Viewport,
 }
 
 impl Ready {
+    /// Construct the whole app state from scratch
     fn new(event_loop: &ActiveEventLoop) -> Self {
         // Initialize window with winit
         let mut window = WindowAttributes::default();
@@ -258,6 +277,7 @@ impl Ready {
         }
     }
 
+    /// Draw the app to the window
     fn redraw(&mut self) -> ControlFlow<()> {
         if self.resized {
             self.reconfigure_surface()?;
@@ -347,6 +367,7 @@ impl Ready {
         ControlFlow::Continue(())
     }
 
+    /// Setup the render state to a new window size
     fn reconfigure_surface(&mut self) -> ControlFlow<()> {
         let PhysicalSize { width, height } = self.target_ctx.window.inner_size();
         self.target_ctx.config.width = width;
@@ -365,6 +386,7 @@ impl Ready {
         ControlFlow::Continue(())
     }
 
+    /// Handle when the cursor moved
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) -> ControlFlow<()> {
         let PhysicalPosition { x, y } = position.cast();
         let position = na::Point2::new(x, y);
@@ -373,12 +395,14 @@ impl Ready {
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
+    /// Handle when a mouse button was clicked
     fn mouse_input(&mut self, button: MouseButton, state: ElementState) -> ControlFlow<()> {
         let message = Message::MouseInput { button, state };
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
+    /// Handle when the mouse wheel was scrolled
     fn scrolled(&mut self, delta: MouseScrollDelta) -> ControlFlow<()> {
         use std::cmp::Ordering;
 
@@ -398,18 +422,21 @@ impl Ready {
         ControlFlow::Continue(())
     }
 
+    /// Handle when a keyboard button was pressed
     fn key_pressed(&mut self, key: SmolStr) -> ControlFlow<()> {
         let message = Message::KeyPress(key);
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
+    /// Handle when a modifier key was pressed
     fn modifiers_changed(&mut self, modifiers: Modifiers) -> ControlFlow<()> {
         let message = Message::ModifiersChanged(modifiers.state());
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
+    /// Handle when a resize was requested
     const fn resized(&mut self) -> ControlFlow<()> {
         self.resized = true;
         ControlFlow::Continue(())

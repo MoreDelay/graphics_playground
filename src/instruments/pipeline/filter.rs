@@ -1,3 +1,5 @@
+//! Instruments to run filter convolutions
+
 use iced::wgpu;
 use image::EncodableLayout as _;
 
@@ -5,11 +7,14 @@ use crate::instruments::GpuContext;
 use crate::instruments::bind::storage::{SimpleStorageTexture, StorageSrcDstLayout};
 use crate::instruments::buffer::SimpleBuffer;
 
+/// The convolution pipeline
 pub struct ConvolutionPipeline(wgpu::ComputePipeline);
 
 impl ConvolutionPipeline {
+    /// The convolution compute shader path
     const SHADER_CONVOLUTION: &str = "package::mipmap::convolution";
 
+    /// Create a new convolution pipeline
     pub fn new(
         ctx: &GpuContext,
         layout: &ConvolutionPipelineLayout,
@@ -34,6 +39,7 @@ impl ConvolutionPipeline {
         Self(pipeline)
     }
 
+    /// Execute a convolution
     #[expect(clippy::too_many_arguments)]
     pub fn run(
         &self,
@@ -62,8 +68,8 @@ impl ConvolutionPipeline {
             storage_src,
             storage_scratch,
             kernel_bind,
-            Axis::X,
             mip_level,
+            Axis::X,
         );
 
         self.run_internal(
@@ -73,11 +79,12 @@ impl ConvolutionPipeline {
             storage_scratch,
             storage_dst,
             kernel_bind,
-            Axis::Y,
             mip_level,
+            Axis::Y,
         );
     }
 
+    /// Run the convolution on a specific axis
     #[expect(clippy::too_many_arguments)]
     fn run_internal(
         &self,
@@ -87,8 +94,8 @@ impl ConvolutionPipeline {
         storage_src: &SimpleStorageTexture,
         storage_dst: &SimpleStorageTexture,
         kernel_bind: &KernelBinding,
-        axis: Axis,
         mip_level: u32,
+        axis: Axis,
     ) {
         let src_view = storage_src.create_view(&wgpu::TextureViewDescriptor {
             base_mip_level: mip_level,
@@ -132,9 +139,11 @@ impl ConvolutionPipeline {
     }
 }
 
+/// The layout for [`ConvolutionPipeline`]
 pub struct ConvolutionPipelineLayout(wgpu::PipelineLayout);
 
 impl ConvolutionPipelineLayout {
+    /// Create a new layout
     pub fn new(
         ctx: &GpuContext,
         storage_layout: &StorageSrcDstLayout,
@@ -160,20 +169,29 @@ impl std::ops::Deref for ConvolutionPipelineLayout {
     }
 }
 
+/// The bindings for executing a 2d convolution
 pub struct KernelBinding {
+    /// The metadata for the run on the X-axis
     bind_group_x: wgpu::BindGroup,
+    /// The metadata for the run on the Y-axis
     bind_group_y: wgpu::BindGroup,
-    #[expect(unused)]
+
+    /// The storage texture holding all kernel weight values
+    #[expect(unused, reason = "used in bindings above")]
     storage_texture: wgpu::Texture,
-    #[expect(unused)]
+    /// Kernel metadata for X-axis
+    #[expect(unused, reason = "used in x-binding above")]
     buffer_x: SimpleBuffer<KernelInfoRaw>,
-    #[expect(unused)]
+    /// Kernel metadata for Y-axis
+    #[expect(unused, reason = "used in y-binding above")]
     buffer_y: SimpleBuffer<KernelInfoRaw>,
+    /// The number of weights used in this kernel
     #[expect(unused)]
     kernel_size: u32,
 }
 
 impl KernelBinding {
+    /// Create a new kernel weights binding
     pub fn new(
         ctx: &GpuContext,
         layout: &KernelLayout,
@@ -233,14 +251,17 @@ impl KernelBinding {
         }
     }
 
+    /// Get the bind group for the X-axis pass
     const fn bind_group_x(&self) -> &wgpu::BindGroup {
         &self.bind_group_x
     }
 
+    /// Get the bind group for the Y-axis pass
     const fn bind_group_y(&self) -> &wgpu::BindGroup {
         &self.bind_group_y
     }
 
+    /// Create the storage texture holding the kernel weights
     fn create_kernel_texture(ctx: &GpuContext, kernel: &[f32]) -> wgpu::Texture {
         let n_kernel = kernel.len();
         let kernel = kernel.as_bytes();
@@ -298,9 +319,11 @@ impl std::ops::Deref for KernelBinding {
     }
 }
 
+/// The layout for [`KernelBinding`]
 pub struct KernelLayout(wgpu::BindGroupLayout);
 
 impl KernelLayout {
+    /// Create a new layout
     pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
         let bind = ctx
             .device
@@ -341,6 +364,7 @@ impl std::ops::Deref for KernelLayout {
     }
 }
 
+/// The axis on which a convolution pass is executed on
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
@@ -348,6 +372,7 @@ pub enum Axis {
     Y = 1,
 }
 
+/// Raw convolution metadata used in shader
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct KernelInfoRaw {

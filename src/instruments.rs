@@ -1,3 +1,15 @@
+//! Contains all rendering instruments
+//!
+//! Instruments are wrappers around wgpu objects designed to perform or be used for a specific
+//! purpose. This makes it easier to orchestrate more complex behavior without accidentally using
+//! the wrong handles.
+//!
+//! For example, to use a resource in a shader, we need to use some [`wgpu::BindGroup`]. However,
+//! behind this handle can be many different kinds of resources, such as buffers (of different
+//! data), textures, etc. To not mix these up, we wrap all these handles in concrete types to easily
+//! differentiate between them, such as [`buffer::SimpleBuffer`] or
+//! [`bind::texture::SimpleTexture`].
+
 pub mod bind;
 pub mod buffer;
 pub mod mipmap;
@@ -14,19 +26,28 @@ use image::{ImageBuffer, Rgba};
 use wesl::Wesl;
 use winit::window::Window;
 
+/// Directory root where shaders are located
 pub const SHADER_ROOT: &str = "src/shader";
 
+/// Context to work with the gpu
 pub struct GpuContext {
+    /// The global [`wgpu::Device`]
     pub device: wgpu::Device,
+    /// The global [`wgpu::Queue`]
     pub queue: wgpu::Queue,
 }
 
+/// Context to work with the window
 pub struct TargetContext {
+    /// The window that we draw to
     pub window: Arc<Window>,
+    /// The surface configures for wgpu
     pub surface: wgpu::Surface<'static>,
+    /// The current configuration of our surface
     pub config: wgpu::SurfaceConfiguration,
 }
 
+/// Helper to create a simple shader module description with no features
 pub fn create_simple_shader_module_desc<'a>(
     label: Option<&'a str>,
     wesl_path: &str,
@@ -43,6 +64,7 @@ pub fn create_simple_shader_module_desc<'a>(
     }
 }
 
+/// Debug helper to download and save a texture as an image
 #[expect(dead_code, reason = "currently only ever used for debugging")]
 pub fn save_texture_as_image(ctx: &GpuContext, texture: &wgpu::Texture, image_path: &Path) {
     assert!(

@@ -1,13 +1,18 @@
+//! Instruments for downsampling textures by half
+
 use iced::wgpu;
 
 use crate::instruments::GpuContext;
 use crate::instruments::bind::storage::{SimpleStorageTexture, StorageSrcDstLayout};
 
+/// The downsampling pipeline, halfing the texture in each dimension
 pub struct HalfingPipeline(wgpu::ComputePipeline);
 
 impl HalfingPipeline {
+    /// Halfing compute shader path
     const SHADER_HALFING: &str = "package::mipmap::halfing";
 
+    /// Create a new pipeline
     pub fn new(
         ctx: &GpuContext,
         layout: &HalfingPipelineLayout,
@@ -32,6 +37,7 @@ impl HalfingPipeline {
         Self(pipeline)
     }
 
+    /// Execute the downsampling
     pub fn run(
         &self,
         ctx: &GpuContext,
@@ -80,9 +86,11 @@ impl HalfingPipeline {
     }
 }
 
+/// The layout for [`HalfingPipeline`]
 pub struct HalfingPipelineLayout(wgpu::PipelineLayout);
 
 impl HalfingPipelineLayout {
+    /// Create a new layout
     pub fn new(ctx: &GpuContext, storage: &StorageSrcDstLayout, label: Option<&str>) -> Self {
         let layout = ctx
             .device

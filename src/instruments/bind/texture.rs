@@ -1,15 +1,24 @@
+//! Contains structs to handle simple, unsampled image textures
+
 use iced::wgpu;
 
 use crate::instruments::GpuContext;
 
+/// A simple texture that can be bound for rendering (without sampling)
+///
+/// To bind this texture, use [`SimpleTextureLayout`].
 pub struct SimpleTexture {
+    /// The inner texture
     texture: wgpu::Texture,
-    #[expect(unused)]
+    /// A view to the texture
+    #[expect(unused, reason = "this view is used in the binding below")]
     view: wgpu::TextureView,
+    /// The bind group for this texture
     bind: wgpu::BindGroup,
 }
 
 impl SimpleTexture {
+    /// Create a new simple texture by wrapping an existing texture
     pub fn new(
         ctx: &GpuContext,
         layout: &SimpleTextureLayout,
@@ -32,6 +41,7 @@ impl SimpleTexture {
         }
     }
 
+    /// Create a new empty texture
     pub fn empty(
         ctx: &GpuContext,
         layout: &SimpleTextureLayout,
@@ -65,6 +75,7 @@ impl SimpleTexture {
         }
     }
 
+    /// Get the inner texture
     pub const fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
@@ -78,9 +89,11 @@ impl std::ops::Deref for SimpleTexture {
     }
 }
 
+/// The layout for [`SimpleTexture`]
 pub struct SimpleTextureLayout(wgpu::BindGroupLayout);
 
 impl SimpleTextureLayout {
+    /// Create a new layout
     pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
         let layout = ctx
             .device

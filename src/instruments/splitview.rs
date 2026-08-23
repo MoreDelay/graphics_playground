@@ -1,9 +1,12 @@
+//! Contains the functionality to draw two images in a split view
+
 use iced::wgpu;
 
 use crate::image::ClampedSplit;
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
 
+/// Draw two images to the viewport, split as specified by [`ClampedSplit`]
 pub fn draw_splitted(
     passthru: &PassThruPipeline,
     encoder: &mut wgpu::CommandEncoder,

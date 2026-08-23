@@ -18,7 +18,7 @@ use nalgebra as na;
 
 use crate::controls::coords::{LocalCoords, LocalPoint};
 use crate::hello_triangle::HelloWidget;
-use crate::image::{ClampedSplit, ImageMemory, ImageMessage, ImageWidget};
+use crate::image::{ClampedSplit, ImageMemory, ImageMessage, ImageWidget, SplitReaction};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
@@ -51,11 +51,6 @@ pub enum Message {
     ModifiersChanged(ModifiersState),
     /// A keyboard button was pressed
     KeyPress(SmolStr),
-    /// Start moving the image split
-    DragSplit {
-        /// Whether future cursor movement acts on the split
-        active: bool,
-    },
     /// A message intended for the image widget
     Image(ImageMessage),
 }
@@ -220,7 +215,6 @@ impl Controls {
             }
             (CurrentScene::HelloTriangle(_), Message::ScrollUp) => (),
             (CurrentScene::HelloTriangle(_), Message::ScrollDown) => (),
-            (CurrentScene::HelloTriangle(_), Message::DragSplit { .. }) => (),
             (CurrentScene::HelloTriangle(_), Message::Image(..)) => (),
 
             (CurrentScene::Image(_), Message::SwitchScene) => {
@@ -239,10 +233,6 @@ impl Controls {
             }
             (CurrentScene::Image(widget), Message::ScrollDown) => {
                 let message = ImageMessage::ZoomOut { cursor };
-                widget.update(message);
-            }
-            (CurrentScene::Image(widget), Message::DragSplit { active }) => {
-                let message = ImageMessage::DragSplit { active };
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Image(msg)) => widget.update(msg),
@@ -388,6 +378,14 @@ impl Controls {
             }
             ElementState::Released => self.mouse_button = ElementState::Released,
         }
+        match &mut self.scene {
+            CurrentScene::HelloTriangle(_) => (),
+            CurrentScene::Image(widget) => {
+                let active = self.mouse_button == ElementState::Pressed;
+                let message = ImageMessage::Panning { active };
+                widget.update(message);
+            }
+        }
     }
 }
 
@@ -433,7 +431,7 @@ pub struct PlaceholderWidget<'a> {
     /// The current layout bounds get stored here
     bounds: &'a Cell<Option<PhysicalInsets<u32>>>,
     /// The split location
-    split: Option<ClampedSplit>,
+    split: Option<SplitReaction>,
     /// The background color to draw
     bg_color: Color,
     /// The current scale factor
@@ -483,10 +481,10 @@ where
                     return;
                 }
                 shell.capture_event();
-                shell.publish(Message::DragSplit { active: true });
+                shell.publish(Message::Image(ImageMessage::DragSplit { active: true }));
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                shell.publish(Message::DragSplit { active: false });
+                shell.publish(Message::Image(ImageMessage::DragSplit { active: false }));
             }
             Event::Keyboard(_)
             | Event::Mouse(_)
@@ -537,6 +535,11 @@ where
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
+        let reaction = matches!(self.split, Some(SplitReaction { react: true, .. }));
+        if !reaction {
+            return mouse::Interaction::None;
+        }
+
         let Some(local) = self.local_cursor(layout, cursor) else {
             return mouse::Interaction::None;
         };
@@ -576,7 +579,7 @@ impl PlaceholderWidget<'_> {
     fn split_rect(&self, layout: Layout<'_>) -> Option<Rectangle<f32>> {
         let bounds = self.compute_bounds(layout);
         let coords = LocalCoords::new(bounds, self.scale_factor);
-        let x = match self.split? {
+        let x = match self.split?.split {
             ClampedSplit::FullLeft => 0.,
             ClampedSplit::Split(pos) => pos,
             ClampedSplit::FullRight => coords.size().width as f32,

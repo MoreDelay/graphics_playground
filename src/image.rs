@@ -35,6 +35,8 @@ pub struct ImageWidget {
     params: DrawParameters,
     /// The state of the image split
     split: Split,
+    /// Whether we are currently panning the images
+    panning: bool,
 }
 
 impl ImageWidget {
@@ -53,15 +55,19 @@ impl ImageWidget {
             right: None,
             params: DrawParameters::default(),
             split: Split::default(),
+            panning: false,
         }
     }
 
     /// Get the current image split position
-    pub const fn split(&self) -> Option<ClampedSplit> {
+    pub const fn split(&self) -> Option<SplitReaction> {
         let got_two = self.left.is_some() && self.right.is_some();
-        let width = self.params.viewport.width as f32;
         if got_two {
-            Some(self.split.clamped(width))
+            let width = self.params.viewport.width as f32;
+            let split = self.split.clamped(width);
+            let react = matches!(self.split, Split::Dragging(..)) || !self.panning;
+            let reaction = SplitReaction { split, react };
+            Some(reaction)
         } else {
             None
         }
@@ -139,6 +145,7 @@ impl ImageWidget {
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
             ImageMessage::DragSplit { active } => self.drag_split(active),
+            ImageMessage::Panning { active } => self.panning(active),
         }
     }
 
@@ -400,6 +407,11 @@ impl ImageWidget {
         };
     }
 
+    /// Update whether the images are getting panned
+    const fn panning(&mut self, active: bool) {
+        self.panning = active;
+    }
+
     /// Make sure that at least 10% of the viewport area shows part of the image.
     fn clamp_offset(&mut self) {
         const FILLED_PERCENT: f32 = 0.1;
@@ -502,6 +514,15 @@ impl ClampedSplit {
     }
 }
 
+/// Describes to the controller how to display the split
+#[derive(Debug, Clone, Copy)]
+pub struct SplitReaction {
+    /// The split itself
+    pub split: ClampedSplit,
+    /// Whether the mouse should indicate an interaction with the split
+    pub react: bool,
+}
+
 /// The rendering state for a single image
 struct SingleImageState {
     /// The loaded image in memory
@@ -559,6 +580,11 @@ pub enum ImageMessage {
         /// Whether the split is now actively dragged or no longer dragged
         active: bool,
     },
+    /// Start panning the images
+    Panning {
+        /// Whether we are now panning or no longer panning
+        active: bool,
+    },
 }
 
 impl std::fmt::Debug for ImageMessage {
@@ -588,6 +614,7 @@ impl std::fmt::Debug for ImageMessage {
             Self::DragSplit { active } => {
                 f.debug_struct("DragSplit").field("active", active).finish()
             }
+            Self::Panning { active } => f.debug_struct("Panning").field("active", active).finish(),
         }
     }
 }

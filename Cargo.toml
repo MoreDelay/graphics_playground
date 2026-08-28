@@ -9,6 +9,7 @@ members = ["parsers"]
 
 [dependencies]
 bytemuck = "1.25.0"
+derive_more = "2.1.1"
 iced = {
   version = "0.14.0",
   # We need to disable web-colors because that breaks iced::Color interpretation, which should

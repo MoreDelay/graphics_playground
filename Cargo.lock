@@ -1488,6 +1488,7 @@ name = "graphics-playground"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "derive_more",
  "iced",
  "iced_graphics",
  "iced_wgpu",

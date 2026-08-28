@@ -2,13 +2,14 @@
 
 use std::cell::Cell;
 use std::ops::ControlFlow;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use derive_more::Display;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced::{Event, Rectangle};
 use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Renderer, wgpu};
-use iced_widget::{button, column, container, row, text};
+use iced_widget::{button, column, combo_box, container, row, text};
 use iced_winit::conversion::cursor_position;
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets, PhysicalPosition};
@@ -31,7 +32,7 @@ pub enum Message {
     /// Update the scale factor
     SetScaleFactor(f32),
     /// Switch the displayed scene
-    SwitchScene,
+    SwitchScene(Scene),
     /// Open the file picker
     SelectFile,
     /// Mouse scrolled up
@@ -69,9 +70,9 @@ pub struct Controls {
     passthru: PassThruPipeline,
     /// The current scene to display
     scene: CurrentScene,
-    /// The last loaded image path
-    image: Option<PathBuf>,
 
+    /// Combo box state for scene selection
+    combo_box_scene: combo_box::State<Scene>,
     /// The state of the left mouse button
     mouse_button: ElementState,
     /// The location of the cursor
@@ -92,7 +93,8 @@ impl Controls {
         let viewport = Viewport::new();
         let passthru = PassThruPipeline::new(ctx, target.config.format);
         let scene = CurrentScene::triangle(ctx, target);
-        let image = None;
+
+        let combo_box_scene = combo_box::State::new(vec![Scene::HelloTriangle, Scene::Image]);
         let mouse_button = ElementState::Released;
         let cursor = CursorState::default();
         let modifiers = ModifiersState::default();
@@ -101,7 +103,8 @@ impl Controls {
             viewport,
             passthru,
             scene,
-            image,
+
+            combo_box_scene,
             mouse_button,
             cursor,
             modifiers,
@@ -132,6 +135,11 @@ impl Controls {
         };
         let scene = Element::new(placeholder);
 
+        let current_scene = match self.scene {
+            CurrentScene::HelloTriangle(_) => Scene::HelloTriangle,
+            CurrentScene::Image(_) => Scene::Image,
+        };
+        // combo_box(state, placeholder, selection, on_selected)
         let control = column![
             container(
                 text("Graphics Playground")
@@ -140,12 +148,13 @@ impl Controls {
                     .width(Fill)
             )
             .align_top(60.),
-            button(text("Switch Scene").center().width(Fill))
-                .width(Fill)
-                .on_press(Message::SwitchScene),
-            button(text("Open Image").center().width(Fill))
-                .width(Fill)
-                .on_press(Message::SelectFile)
+            combo_box(
+                &self.combo_box_scene,
+                "Select scene...",
+                Some(&current_scene),
+                Message::SwitchScene,
+            )
+            .width(Fill),
         ]
         .width(Self::PANEL_WIDTH as f32)
         .padding(5);
@@ -154,6 +163,11 @@ impl Controls {
             CurrentScene::HelloTriangle(_) => control,
             CurrentScene::Image(_) => control
                 .push(iced::widget::space().height(5.))
+                .push(
+                    button(text("Open Image").center().width(Fill))
+                        .width(Fill)
+                        .on_press(Message::SelectFile),
+                )
                 .push(
                     button(text("Toggle Filter").center().width(Fill))
                         .padding(5.)
@@ -195,34 +209,32 @@ impl Controls {
             .and_then(|cursor| self.viewport.coords().local_point(cursor));
 
         match (&mut self.scene, message) {
+            (current, Message::SwitchScene(next)) if &next != current => match next {
+                Scene::HelloTriangle => self.scene = CurrentScene::triangle(ctx, target),
+                Scene::Image => {
+                    self.scene = CurrentScene::image(&self.viewport);
+                }
+            },
+            (_, Message::SwitchScene(_)) => (),
+
             (_, Message::SetScaleFactor(factor)) => self.viewport.update_scale_factor(factor),
             (_, Message::ModifiersChanged(mods)) => self.modifiers = mods,
             (_, Message::CursorMoved(position)) => self.cursor_moved(position),
             (_, Message::MouseInput { button, state }) => self.mouse_input(button, state),
-            (_, Message::KeyPress(key)) => match key.as_str() {
-                "q" if self.modifiers.control_key() => {
-                    return ControlFlow::Break(());
-                }
-                _ => self.key_pressed(&key),
-            },
+            (_, Message::KeyPress(key)) => return self.key_pressed(&key),
 
-            (CurrentScene::HelloTriangle(_), Message::SwitchScene) => {
-                self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
-            }
-            (CurrentScene::HelloTriangle(_), Message::SelectFile) => {
-                self.image = Self::pick_image_dialog();
-                self.scene = CurrentScene::image(self.image.as_deref(), &self.viewport);
-            }
+            (CurrentScene::HelloTriangle(_), Message::SelectFile) => (),
             (CurrentScene::HelloTriangle(_), Message::ScrollUp) => (),
             (CurrentScene::HelloTriangle(_), Message::ScrollDown) => (),
             (CurrentScene::HelloTriangle(_), Message::Image(..)) => (),
 
-            (CurrentScene::Image(_), Message::SwitchScene) => {
-                self.scene = CurrentScene::triangle(ctx, target);
-            }
             (CurrentScene::Image(widget), Message::SelectFile) => {
-                self.image = Self::pick_image_dialog();
-                if let Some(image) = self.image.as_deref().and_then(load_image) {
+                let image = Self::pick_image_dialog().and_then(|path| {
+                    ImageMemory::load(&path)
+                        .inspect_err(|e| eprintln!("Could not load image: {e}"))
+                        .ok()
+                });
+                if let Some(image) = image {
                     let msg = ImageMessage::SetImage(image);
                     widget.update(msg);
                 }
@@ -323,19 +335,24 @@ impl Controls {
     }
 
     /// Handle a keyboard button press
-    fn key_pressed(&mut self, key: &SmolStr) {
-        let Some(pos) = self.cursor.pos() else { return };
-        let pos = self.viewport.coords().local_point(pos);
+    fn key_pressed(&mut self, key: &SmolStr) -> ControlFlow<()> {
+        // Quit with CTRL+Q
+        if key.as_str() == "q" && self.modifiers.control_key() {
+            return ControlFlow::Break(());
+        }
 
         match &mut self.scene {
             CurrentScene::HelloTriangle(_) => (),
             CurrentScene::Image(widget) => {
-                let Some(message) = ImageMessage::from_key(key, pos) else {
-                    return;
-                };
-                widget.update(message);
+                if let Some(pos) = self.cursor.pos()
+                    && let pos = self.viewport.coords().local_point(pos)
+                    && let Some(message) = ImageMessage::from_key(key, pos)
+                {
+                    widget.update(message);
+                }
             }
         }
+        ControlFlow::Continue(())
     }
 
     /// Handle the moved cursor
@@ -406,19 +423,33 @@ impl CurrentScene {
     }
 
     /// Constructor for [`Self::Image`]
-    fn image(path: Option<&Path>, viewport: &Viewport) -> Self {
+    fn image(viewport: &Viewport) -> Self {
         let mut widget = ImageWidget::new();
 
         let size = viewport.size();
         let msg = ImageMessage::ResizedViewport(size);
         widget.update(msg);
 
-        if let Some(image) = path.and_then(load_image) {
-            let msg = ImageMessage::SetImage(image);
-            widget.update(msg);
-        }
-
         Self::Image(widget)
+    }
+}
+
+/// The options of scenes to display in the viewport
+#[derive(Debug, Clone, Copy, Display, PartialEq, Eq)]
+pub enum Scene {
+    /// The [`CurrentScene::HelloTriangle`] scene
+    HelloTriangle,
+    /// The [`CurrentScene::Image`] scene
+    Image,
+}
+
+impl PartialEq<CurrentScene> for Scene {
+    fn eq(&self, other: &CurrentScene) -> bool {
+        matches!(
+            (self, other),
+            (Self::HelloTriangle, CurrentScene::HelloTriangle(_))
+                | (Self::Image, CurrentScene::Image(_))
+        )
     }
 }
 
@@ -602,13 +633,6 @@ impl PlaceholderWidget<'_> {
         let coords = LocalCoords::new(bounds, self.scale_factor);
         coords.local_point(point)
     }
-}
-
-/// Helper to load an image
-fn load_image(path: &Path) -> Option<ImageMemory> {
-    ImageMemory::load(path)
-        .inspect_err(|e| eprintln!("Could not load image: {e}"))
-        .ok()
 }
 
 /// Tracks the cursor within the window

@@ -12,6 +12,7 @@
 
 pub mod bind;
 pub mod buffer;
+pub mod mesh;
 pub mod mipmap;
 pub mod pipeline;
 pub mod splitview;

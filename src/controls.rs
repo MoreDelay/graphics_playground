@@ -23,6 +23,7 @@ use crate::image::{ClampedSplit, ImageMemory, ImageMessage, ImageWidget, SplitRe
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
+use crate::physics::PhysicsWidget;
 
 pub mod coords;
 
@@ -94,7 +95,8 @@ impl Controls {
         let passthru = PassThruPipeline::new(ctx, target.config.format);
         let scene = CurrentScene::triangle(ctx, target);
 
-        let combo_box_scene = combo_box::State::new(vec![Scene::HelloTriangle, Scene::Image]);
+        let combo_box_scene =
+            combo_box::State::new(vec![Scene::HelloTriangle, Scene::Image, Scene::Physics]);
         let mouse_button = ElementState::Released;
         let cursor = CursorState::default();
         let modifiers = ModifiersState::default();
@@ -120,12 +122,14 @@ impl Controls {
         let bg_color = match &self.scene {
             CurrentScene::HelloTriangle(_) => HelloWidget::bg_color(),
             CurrentScene::Image(_) => Color::BLACK,
+            CurrentScene::Physics(_) => Color::BLACK,
         };
 
         let bounds = &self.scene_bounds;
         let split = match &self.scene {
             CurrentScene::HelloTriangle(_) => None,
             CurrentScene::Image(image) => image.split(),
+            CurrentScene::Physics(_) => None,
         };
         let placeholder = PlaceholderWidget {
             bounds,
@@ -138,6 +142,7 @@ impl Controls {
         let current_scene = match self.scene {
             CurrentScene::HelloTriangle(_) => Scene::HelloTriangle,
             CurrentScene::Image(_) => Scene::Image,
+            CurrentScene::Physics(_) => Scene::Physics,
         };
         // combo_box(state, placeholder, selection, on_selected)
         let control = column![
@@ -187,6 +192,7 @@ impl Controls {
                             zoom: 1.,
                         })),
                 ),
+            CurrentScene::Physics(_) => control,
         };
 
         row![control, scene].into()
@@ -213,6 +219,9 @@ impl Controls {
                 Scene::HelloTriangle => self.scene = CurrentScene::triangle(ctx, target),
                 Scene::Image => {
                     self.scene = CurrentScene::image(&self.viewport);
+                }
+                Scene::Physics => {
+                    self.scene = CurrentScene::physics();
                 }
             },
             (_, Message::SwitchScene(_)) => (),
@@ -248,6 +257,8 @@ impl Controls {
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Image(msg)) => widget.update(msg),
+
+            (CurrentScene::Physics(_), _) => (),
         }
         ControlFlow::Continue(())
     }
@@ -297,6 +308,7 @@ impl Controls {
                     let msg = ImageMessage::ResizedViewport(size);
                     image.update(msg);
                 }
+                CurrentScene::Physics(_) => (),
             }
         }
 
@@ -312,6 +324,9 @@ impl Controls {
             }
             CurrentScene::Image(image) => {
                 image.render(ctx, target, &self.passthru, &mut encoder, &self.viewport)
+            }
+            CurrentScene::Physics(scene) => {
+                scene.render(ctx, target, &self.passthru, &mut encoder, &self.viewport)
             }
         };
 
@@ -351,6 +366,7 @@ impl Controls {
                     widget.update(message);
                 }
             }
+            CurrentScene::Physics(_) => (),
         }
         ControlFlow::Continue(())
     }
@@ -377,6 +393,7 @@ impl Controls {
                 let message = ImageMessage::Pan(offset);
                 widget.update(message);
             }
+            CurrentScene::Physics(_) => (),
         }
     }
 
@@ -402,6 +419,7 @@ impl Controls {
                 let message = ImageMessage::Panning { active };
                 widget.update(message);
             }
+            CurrentScene::Physics(_) => (),
         }
     }
 }
@@ -411,8 +429,10 @@ impl Controls {
 enum CurrentScene {
     /// Display the Hello World triangle
     HelloTriangle(HelloWidget),
-    /// Display the image widget
+    /// Display the image viewer widget
     Image(ImageWidget),
+    /// Display the 2d physics widget
+    Physics(PhysicsWidget),
 }
 
 impl CurrentScene {
@@ -432,6 +452,11 @@ impl CurrentScene {
 
         Self::Image(widget)
     }
+
+    fn physics() -> Self {
+        let physics = PhysicsWidget::new();
+        Self::Physics(physics)
+    }
 }
 
 /// The options of scenes to display in the viewport
@@ -441,6 +466,8 @@ pub enum Scene {
     HelloTriangle,
     /// The [`CurrentScene::Image`] scene
     Image,
+    /// The [`CurrentScene::Physics`] scene
+    Physics,
 }
 
 impl PartialEq<CurrentScene> for Scene {

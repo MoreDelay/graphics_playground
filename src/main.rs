@@ -5,6 +5,8 @@ mod controls;
 mod hello_triangle;
 mod image;
 mod instruments;
+mod model;
+mod physics;
 
 pub fn main() -> Result<(), EventLoopError> {
     tracing_subscriber::fmt::init();

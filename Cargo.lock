@@ -2369,6 +2369,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adc43a60c217b0c6ff46e47f26911015ad8d2e5a8be1af668c67e370d99a4346"
 dependencies = [
  "approx",
+ "bytemuck",
  "glam 0.30.10",
  "glam 0.31.1",
  "glam 0.32.1",

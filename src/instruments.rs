@@ -48,6 +48,80 @@ pub struct TargetContext {
     pub config: wgpu::SurfaceConfiguration,
 }
 
+/// Marker enum to handle instrument reuse
+#[derive(Default)]
+pub enum Use<T> {
+    /// Unchecked and unavailable
+    #[default]
+    Missing,
+    /// Checked but unused
+    Invalid,
+    /// Checked and available
+    Active(T),
+    /// Unchecked but available
+    Recycle(T),
+    /// Checked and available but unused
+    ///
+    /// This allows it to get recycled when it needs to be used again
+    Unused(T),
+}
+
+impl<T> Use<T> {
+    /// Move out the stored object
+    pub fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+
+    /// Test if this object has been checked during this draw call
+    pub const fn checked(&self) -> bool {
+        matches!(self, Self::Invalid | Self::Active(_) | Self::Unused(_))
+    }
+
+    /// Assert this object is active and get a reference
+    pub fn active(&self) -> &T {
+        let Self::Active(v) = self else {
+            panic!("value is not in active use");
+        };
+        v
+    }
+
+    /// Assert this object was checked and get the checked result
+    pub fn maybe_active(&self) -> Option<&T> {
+        match self {
+            Self::Missing | Self::Recycle(_) => panic!("value still unchecked"),
+            Self::Active(v) => Some(v),
+            Self::Invalid | Self::Unused(_) => None,
+        }
+    }
+
+    /// Mark the current object as unchecked for the current drawing pass
+    pub fn degrade(&mut self) {
+        *self = match self.take() {
+            Self::Missing => Self::Missing,
+            Self::Invalid => Self::Missing,
+            Self::Active(v) => Self::Recycle(v),
+            Self::Recycle(v) => Self::Recycle(v),
+            Self::Unused(v) => Self::Recycle(v),
+        }
+    }
+
+    /// Drop the current object, making it missing
+    pub fn discard(&mut self) {
+        *self = Self::Missing;
+    }
+
+    /// Mark this object checked but unused
+    pub fn make_unused(self) -> Self {
+        match self {
+            Self::Missing => Self::Invalid,
+            Self::Invalid => Self::Invalid,
+            Self::Active(v) => Self::Unused(v),
+            Self::Recycle(v) => Self::Unused(v),
+            Self::Unused(v) => Self::Unused(v),
+        }
+    }
+}
+
 /// Helper to create a simple shader module description with no features
 pub fn create_simple_shader_module_desc<'a>(
     label: Option<&'a str>,

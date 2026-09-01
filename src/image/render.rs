@@ -28,7 +28,7 @@ use crate::instruments::pipeline::image::{
 };
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::viewport::Viewport;
-use crate::instruments::{GpuContext, TargetContext};
+use crate::instruments::{GpuContext, TargetContext, Use};
 
 /// The rendering instruments independent of any concrete image
 #[derive(Default)]
@@ -813,80 +813,6 @@ impl ImageDataInstruments {
             Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
                 Some(passthru.create_texture(ctx, extent))
             }
-        }
-    }
-}
-
-/// Marker enum to handle instrument reuse
-#[derive(Default)]
-enum Use<T> {
-    /// Unchecked and unavailable
-    #[default]
-    Missing,
-    /// Checked but unused
-    Invalid,
-    /// Checked and available
-    Active(T),
-    /// Unchecked but available
-    Recycle(T),
-    /// Checked and available but unused
-    ///
-    /// This allows it to get recycled when it needs to be used again
-    Unused(T),
-}
-
-impl<T> Use<T> {
-    /// Move out the stored object
-    fn take(&mut self) -> Self {
-        std::mem::take(self)
-    }
-
-    /// Test if this object has been checked during this draw call
-    const fn checked(&self) -> bool {
-        matches!(self, Self::Invalid | Self::Active(_) | Self::Unused(_))
-    }
-
-    /// Assert this object is active and get a reference
-    fn active(&self) -> &T {
-        let Self::Active(v) = self else {
-            panic!("value is not in active use");
-        };
-        v
-    }
-
-    /// Assert this object was checked and get the checked result
-    fn maybe_active(&self) -> Option<&T> {
-        match self {
-            Self::Missing | Self::Recycle(_) => panic!("value still unchecked"),
-            Self::Active(v) => Some(v),
-            Self::Invalid | Self::Unused(_) => None,
-        }
-    }
-
-    /// Mark the current object as unchecked for the current drawing pass
-    fn degrade(&mut self) {
-        *self = match self.take() {
-            Self::Missing => Self::Missing,
-            Self::Invalid => Self::Missing,
-            Self::Active(v) => Self::Recycle(v),
-            Self::Recycle(v) => Self::Recycle(v),
-            Self::Unused(v) => Self::Recycle(v),
-        }
-    }
-
-    /// Drop the current object, making it missing
-    fn discard(&mut self) {
-        *self = Self::Missing;
-    }
-
-    /// Mark this object checked but unused
-    fn make_unused(self) -> Self {
-        match self {
-            Self::Missing => Self::Invalid,
-            Self::Invalid => Self::Invalid,
-            Self::Active(v) => Self::Unused(v),
-            Self::Recycle(v) => Self::Unused(v),
-            Self::Unused(v) => Self::Unused(v),
         }
     }
 }

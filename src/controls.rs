@@ -453,6 +453,7 @@ impl CurrentScene {
         Self::Image(widget)
     }
 
+    /// Constructor for [`Self::Physics`]
     fn physics() -> Self {
         let physics = PhysicsWidget::new();
         Self::Physics(physics)

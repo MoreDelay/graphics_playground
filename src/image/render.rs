@@ -253,14 +253,16 @@ impl ImageMetaInstruments {
         };
 
         match self.final_output.take() {
-            checked @ (Use::Active(_) | Use::Invalid) => {
-                self.final_output = checked;
+            Use::Invalid => {
+                self.final_output = Use::Invalid;
                 None
             }
-            Use::Recycle(output) | Use::Unused(output) if output.texture().size() == extent => {
+            Use::Active(output) | Use::Recycle(output) | Use::Unused(output)
+                if output.texture().size() == extent =>
+            {
                 Some(output)
             }
-            Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
+            Use::Active(_) | Use::Recycle(_) | Use::Unused(_) | Use::Missing => {
                 Some(passthru.create_texture(ctx, extent))
             }
         }

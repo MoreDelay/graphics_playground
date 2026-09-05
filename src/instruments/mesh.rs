@@ -6,6 +6,7 @@ use iced::wgpu;
 use iced::wgpu::util::DeviceExt as _;
 
 use crate::instruments::GpuContext;
+use crate::instruments::bind::physics::{InstanceRaw, VertexRaw};
 
 /// Interface to upload vertex data in the correct format
 pub trait VertexData {
@@ -56,6 +57,8 @@ pub trait IndexData {
 pub struct IndexBuffer<T: IndexData> {
     /// The handle to the buffer
     buffer: wgpu::Buffer,
+    /// Number of indices stored
+    count: u32,
     /// Marker to associate a specific type of mesh to this index buffer
     _marker: PhantomData<T>,
 }
@@ -63,17 +66,25 @@ pub struct IndexBuffer<T: IndexData> {
 impl<T: IndexData> IndexBuffer<T> {
     /// Upload the indices by allocating a new buffer
     pub fn upload(ctx: &GpuContext, data: &T) -> Self {
+        let data = data.data();
+        let count = data.len() as u32 * 3;
         let buffer = ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(data.data()),
+                contents: bytemuck::cast_slice(data),
                 usage: wgpu::BufferUsages::INDEX,
             });
         Self {
             buffer,
+            count,
             _marker: PhantomData,
         }
+    }
+
+    /// Get the number of indices stored in this buffer
+    pub const fn count(&self) -> u32 {
+        self.count
     }
 }
 
@@ -85,30 +96,51 @@ impl<T: IndexData> std::ops::Deref for IndexBuffer<T> {
     }
 }
 
-/// The format expected by shaders
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct VertexRaw {
-    /// The position coordinates of this vertex
-    pub pos: [f32; 2],
-    /// Padding to satisfy wgpu alignment constraints
-    pub _pad1: [u32; 2],
-    /// The color of this vertex
-    pub color: [f32; 3],
-    /// Padding to satisfy wgpu alignment constraints
-    pub _pad2: u32,
+/// Interface to upload vertex data in the correct format
+pub trait InstanceData {
+    /// Get a slice to the vertex data
+    fn data(&self) -> &[InstanceRaw];
 }
 
-impl VertexRaw {
-    /// Create a new raw vertex
-    ///
-    /// Just a helper to eliminate noise about the padding
-    pub const fn new(pos: [f32; 2], color: [f32; 3]) -> Self {
+/// An uploaded vertex buffer ready for use in shaders
+pub struct InstanceBuffer<T: InstanceData> {
+    /// The handle to the buffer
+    buffer: wgpu::Buffer,
+    /// Number of instances stored
+    count: u32,
+    /// Marker to associate a specific type of mesh to this vertex buffer
+    _marker: PhantomData<T>,
+}
+
+impl<T: InstanceData> InstanceBuffer<T> {
+    /// Upload the vertex data by allocating a new buffer
+    pub fn upload(ctx: &GpuContext, data: &T) -> Self {
+        let data = data.data();
+        let count = data.len() as u32;
+        let buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
         Self {
-            pos,
-            _pad1: [0, 0],
-            color,
-            _pad2: 0,
+            buffer,
+            count,
+            _marker: PhantomData,
         }
+    }
+
+    /// Get the number of instances stored in this buffer
+    pub const fn count(&self) -> u32 {
+        self.count
+    }
+}
+
+impl<T: InstanceData> std::ops::Deref for InstanceBuffer<T> {
+    type Target = wgpu::Buffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
     }
 }

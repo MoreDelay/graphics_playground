@@ -23,7 +23,7 @@ use crate::image::{ClampedSplit, ImageMemory, ImageMessage, ImageWidget, SplitRe
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::viewport::Viewport;
 use crate::instruments::{GpuContext, TargetContext};
-use crate::physics::PhysicsWidget;
+use crate::physics::{PhysicsMessage, PhysicsWidget};
 
 pub mod coords;
 
@@ -55,6 +55,8 @@ pub enum Message {
     KeyPress(SmolStr),
     /// A message intended for the image widget
     Image(ImageMessage),
+    /// A message intended for the physics widget
+    Physics(PhysicsMessage),
 }
 
 /// Struct controlling what is displayed by the app
@@ -192,7 +194,11 @@ impl Controls {
                             zoom: 1.,
                         })),
                 ),
-            CurrentScene::Physics(_) => control,
+            CurrentScene::Physics(_) => control.push(
+                button(text("Reset").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::Physics(PhysicsMessage::Reset)),
+            ),
         };
 
         row![control, scene].into()
@@ -221,7 +227,7 @@ impl Controls {
                     self.scene = CurrentScene::image(&self.viewport);
                 }
                 Scene::Physics => {
-                    self.scene = CurrentScene::physics();
+                    self.scene = CurrentScene::physics(ctx, target);
                 }
             },
             (_, Message::SwitchScene(_)) => (),
@@ -235,7 +241,6 @@ impl Controls {
             (CurrentScene::HelloTriangle(_), Message::SelectFile) => (),
             (CurrentScene::HelloTriangle(_), Message::ScrollUp) => (),
             (CurrentScene::HelloTriangle(_), Message::ScrollDown) => (),
-            (CurrentScene::HelloTriangle(_), Message::Image(..)) => (),
 
             (CurrentScene::Image(widget), Message::SelectFile) => {
                 let image = Self::pick_image_dialog().and_then(|path| {
@@ -257,8 +262,11 @@ impl Controls {
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Image(msg)) => widget.update(msg),
+            (_, Message::Image(..)) => (),
 
+            (CurrentScene::Physics(widget), Message::Physics(msg)) => widget.update(msg),
             (CurrentScene::Physics(_), _) => (),
+            (_, Message::Physics(_)) => (),
         }
         ControlFlow::Continue(())
     }
@@ -326,7 +334,7 @@ impl Controls {
                 image.render(ctx, target, &self.passthru, &mut encoder, &self.viewport)
             }
             CurrentScene::Physics(scene) => {
-                scene.render(ctx, target, &self.passthru, &mut encoder, &self.viewport)
+                scene.render(ctx, &self.passthru, &mut encoder, &self.viewport)
             }
         };
 
@@ -393,7 +401,12 @@ impl Controls {
                 let message = ImageMessage::Pan(offset);
                 widget.update(message);
             }
-            CurrentScene::Physics(_) => (),
+            CurrentScene::Physics(widget) => {
+                // TODO: Just some hacky way to update the scene for now, should be ticked from main
+                // event loop
+                let message = PhysicsMessage::Tick;
+                widget.update(message);
+            }
         }
     }
 
@@ -454,8 +467,8 @@ impl CurrentScene {
     }
 
     /// Constructor for [`Self::Physics`]
-    fn physics() -> Self {
-        let physics = PhysicsWidget::new();
+    fn physics(ctx: &GpuContext, target: &TargetContext) -> Self {
+        let physics = PhysicsWidget::new(ctx, target);
         Self::Physics(physics)
     }
 }

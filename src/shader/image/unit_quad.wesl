@@ -1,9 +1,9 @@
 import package::vertex::VertexOut;
 
 @vertex
-fn vs_quad(@builtin(vertex_index) in_vertex_index: u32) -> VertexOut {
+fn vs_unit_quad(@builtin(vertex_index) in_vertex_index: u32) -> VertexOut {
     // generate quad as triangle strip of 4 vertices
-    var pos: vec4<f32> = vec4<f32>(-1., -1., 0., 1.);
+    var pos: vec2<f32> = vec2<f32>(-1., -1.);
     var uv: vec2<f32> = vec2<f32>(0., 1.);
     if in_vertex_index == 1 {
         pos.x = 1.;
@@ -21,7 +21,9 @@ fn vs_quad(@builtin(vertex_index) in_vertex_index: u32) -> VertexOut {
     }
 
     var out: VertexOut;
+    out.clip = vec4(pos, 0., 1.);
     out.pos = pos;
+    out.color = vec3(0., 0., 0.);
     out.uv = uv;
     return out;
 }

@@ -4,13 +4,13 @@ use iced::wgpu;
 
 use crate::image::ClampedSplit;
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
-use crate::instruments::viewport::Viewport;
+use crate::instruments::viewport::ViewportGui;
 
 /// Draw two images to the viewport, split as specified by [`ClampedSplit`]
 pub fn draw_splitted(
     passthru: &PassThruPipeline,
     encoder: &mut wgpu::CommandEncoder,
-    viewport: &Viewport,
+    viewport: &ViewportGui,
     left: &PassThruTexture,
     right: &PassThruTexture,
     target: &wgpu::TextureView,
@@ -56,6 +56,7 @@ pub fn draw_splitted(
     let (bounds_left, bounds_right) = match split {
         ClampedSplit::FullLeft => (None, Some(full)),
         ClampedSplit::Split(split) => {
+            let split = split + viewport.size().width as f32 / 2.;
             let split = split as u32;
             let left = iced::Rectangle {
                 x: 0,

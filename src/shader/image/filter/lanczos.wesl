@@ -21,25 +21,21 @@ fn lanczos_weight(x: f32, a: f32) -> f32 {
 }
 
 fn filter_lanczos(
+    image_pos: vec2<f32>,
     src: texture_2d<f32>,
-    image_info: ImageInfo,
     lanczos_info: LanczosInfo,
-    pos_new: vec4<f32>,
 ) -> vec4<f32> {
     let image_dims = textureDimensions(src);
 
-    let viewport_pos = pos_new.xy;
-    let pos_old = (viewport_pos - image_info.start) / image_info.zoom;
-
-    let inside = 0 <= pos_old.x && pos_old.x <= f32(image_dims.x)
-              && 0 <= pos_old.y && pos_old.y <= f32(image_dims.y);
+    let inside = 0. <= image_pos.x && image_pos.x <= f32(image_dims.x)
+              && 0. <= image_pos.y && image_pos.y <= f32(image_dims.y);
     if !inside {
         discard;
     }
 
-    let image_max = textureDimensions(src) - vec2(1, 1);
+    let image_max = image_dims - vec2(1, 1);
 
-    let pos_f = pos_old - vec2(0.5,0.5);
+    let pos_f = image_pos - vec2(0.5,0.5);
     let pos_u = vec2<u32>(pos_f);
 
     let a_f = lanczos_info.filter_size;

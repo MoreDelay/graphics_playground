@@ -4,10 +4,14 @@ use iced::wgpu;
 use iced_winit::winit::dpi::{PhysicalInsets, PhysicalSize};
 use nalgebra as na;
 
-/// Transforms
+/// Defines a local coordinate system
+///
+/// The positive axes point to the right and up, respectively for x- and y-axis.
 #[derive(Debug, Clone, Copy)]
 pub struct LocalCoords {
     /// Physical location inside the window
+    ///
+    /// The origin is at the center of these bounds
     bounds: PhysicalInsets<u32>,
     /// Scale factor between logical and physical coordinates
     scale_factor: f32,
@@ -15,6 +19,8 @@ pub struct LocalCoords {
 
 impl LocalCoords {
     /// Create new local coordinate transform
+    ///
+    /// The origin is at the center of the provided bounds.
     pub const fn new(bounds: PhysicalInsets<u32>, scale_factor: f32) -> Self {
         assert!(
             scale_factor > 0.,
@@ -75,12 +81,13 @@ impl LocalCoords {
 
     /// Create a local vector
     #[expect(clippy::unused_self)]
-    pub const fn local_vector(&self, vector: na::Vector2<f32>) -> LocalVector {
-        LocalVector::wrap(vector)
+    pub fn local_vector(&self, vector: Physical<na::Vector2<f32>>) -> na::Vector2<f32> {
+        let v = vector.0;
+        na::Vector2::new(v.x, -v.y)
     }
 
     /// Create a local point within the handled area
-    pub fn local_point(&self, point: na::Point2<f32>) -> Option<LocalPoint> {
+    pub fn local_point(&self, point: Physical<na::Point2<f32>>) -> Option<na::Point2<f32>> {
         let PhysicalInsets {
             top,
             left,
@@ -88,18 +95,26 @@ impl LocalCoords {
             right,
         } = self.bounds.cast::<f32>();
 
-        let inside = (left <= point.x && point.x <= right - 1.)
-            && (top <= point.y && point.y <= bottom - 1.);
+        let p = point.0;
 
-        let point = point - *self.offset();
-        inside.then_some(LocalPoint::wrap(point))
+        let inside = (left <= p.x && p.x <= right - 1.) && (top <= p.y && p.y <= bottom - 1.);
+        if !inside {
+            return None;
+        }
+
+        let p = p - self.offset();
+        // flip y axis as window coordinates has this pointing down, we want it up
+        let p = na::Point2::new(p.x, -p.y);
+        Some(p)
     }
 
     /// Get the offset of the local origin in global (physical) coordinates
-    const fn offset(&self) -> LocalVector {
-        let bounds = self.bounds;
-        let offset = na::Vector2::new(bounds.left as f32, bounds.top as f32);
-        LocalVector::wrap(offset)
+    fn offset(&self) -> na::Vector2<f32> {
+        let bounds = self.bounds.cast();
+        let corner = na::Vector2::new(bounds.left, bounds.top);
+        let half = self.size().cast();
+        let half = na::Vector2::new(half.width, half.height) / 2.;
+        corner + half
     }
 }
 
@@ -125,43 +140,3 @@ impl Default for LocalCoords {
 pub struct Physical<T>(pub T)
 where
     T: std::fmt::Debug + Clone + Copy;
-
-/// Wrapper to mark coordinates to be in some local coordinates
-#[derive(Debug, Clone, Copy)]
-pub struct Local<T>(pub Physical<T>)
-where
-    T: std::fmt::Debug + Clone + Copy;
-
-impl<T> std::ops::Deref for Local<T>
-where
-    T: std::fmt::Debug + Clone + Copy,
-{
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0.0
-    }
-}
-impl<T> std::ops::DerefMut for Local<T>
-where
-    T: std::fmt::Debug + Clone + Copy,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.0
-    }
-}
-
-impl<T> Local<T>
-where
-    T: std::fmt::Debug + Clone + Copy,
-{
-    /// Wrap a type to mark them as local
-    pub const fn wrap(inner: T) -> Self {
-        Self(Physical(inner))
-    }
-}
-
-/// Helper alias for a local point
-pub type LocalPoint = Local<na::Point2<f32>>;
-/// Helper alias for a local vector
-pub type LocalVector = Local<na::Vector2<f32>>;

@@ -2,14 +2,22 @@
 
 use iced::wgpu;
 
-use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
+use crate::instruments::bind::image::{LanczosInfoRaw, ViewportRaw};
 use crate::instruments::bind::texture::{SimpleTexture, SimpleTextureLayout};
-use crate::instruments::buffer::{SimpleBufferBind, SimpleBufferBindLayout};
+use crate::instruments::buffer::{
+    SimpleBufferBind,
+    SimpleBufferBindLayout,
+    VisibleFragment,
+    VisibleVertex,
+};
+use crate::instruments::mesh::InstanceBuffer;
+use crate::instruments::mesh::primitives::{InstanceRaw, VertexRaw};
+use crate::instruments::mesh::quad::QuadMesh;
 use crate::instruments::pipeline::ImageFilter;
 use crate::instruments::{GpuContext, SHADER_ROOT};
 
 /// Image viewer vertex shader path
-const SHADER_VERTEX_QUAD: &str = "package::image::quad";
+const SHADER_VERTEX: &str = "package::viewport";
 /// Image viewer fragment shader path
 const SHADER_FRAGMENT_RENDER: &str = "package::image::render";
 
@@ -39,13 +47,21 @@ impl RenderNearestPipeline {
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
+        viewport: &SimpleBufferBind<ViewportRaw, VisibleVertex>,
         image: &SimpleTexture,
-        meta: &SimpleBufferBind<ImageMetadataRaw>,
+        quad: &QuadMesh,
+        instance: &InstanceBuffer<InstanceRaw>,
     ) {
         pass.set_pipeline(&self.0);
-        pass.set_bind_group(0, &**image, &[]);
-        pass.set_bind_group(1, &**meta, &[]);
-        pass.draw(0..4, 0..1);
+        pass.set_bind_group(0, &**viewport, &[]);
+        pass.set_bind_group(1, &**image, &[]);
+
+        pass.set_vertex_buffer(0, quad.vertices().slice(..));
+        pass.set_vertex_buffer(1, instance.slice(..));
+        pass.set_index_buffer(quad.indices().slice(..), wgpu::IndexFormat::Uint32);
+
+        let indices = quad.indices().count();
+        pass.draw_indexed(0..indices, 0, 0..1);
     }
 }
 
@@ -75,13 +91,21 @@ impl RenderBilinearPipeline {
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
+        viewport: &SimpleBufferBind<ViewportRaw, VisibleVertex>,
         image: &SimpleTexture,
-        meta: &SimpleBufferBind<ImageMetadataRaw>,
+        quad: &QuadMesh,
+        instance: &InstanceBuffer<InstanceRaw>,
     ) {
         pass.set_pipeline(&self.0);
-        pass.set_bind_group(0, &**image, &[]);
-        pass.set_bind_group(1, &**meta, &[]);
-        pass.draw(0..4, 0..1);
+        pass.set_bind_group(0, &**viewport, &[]);
+        pass.set_bind_group(1, &**image, &[]);
+
+        pass.set_vertex_buffer(0, quad.vertices().slice(..));
+        pass.set_vertex_buffer(1, instance.slice(..));
+        pass.set_index_buffer(quad.indices().slice(..), wgpu::IndexFormat::Uint32);
+
+        let indices = quad.indices().count();
+        pass.draw_indexed(0..indices, 0, 0..1);
     }
 }
 
@@ -111,15 +135,23 @@ impl RenderLanczosPipeline {
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
+        viewport: &SimpleBufferBind<ViewportRaw, VisibleVertex>,
         image: &SimpleTexture,
-        meta: &SimpleBufferBind<ImageMetadataRaw>,
-        lanczos: &SimpleBufferBind<LanczosInfoRaw>,
+        lanczos: &SimpleBufferBind<LanczosInfoRaw, VisibleFragment>,
+        quad: &QuadMesh,
+        instance: &InstanceBuffer<InstanceRaw>,
     ) {
         pass.set_pipeline(&self.0);
-        pass.set_bind_group(0, &**image, &[]);
-        pass.set_bind_group(1, &**meta, &[]);
+        pass.set_bind_group(0, &**viewport, &[]);
+        pass.set_bind_group(1, &**image, &[]);
         pass.set_bind_group(2, &**lanczos, &[]);
-        pass.draw(0..4, 0..1);
+
+        pass.set_vertex_buffer(0, quad.vertices().slice(..));
+        pass.set_vertex_buffer(1, instance.slice(..));
+        pass.set_index_buffer(quad.indices().slice(..), wgpu::IndexFormat::Uint32);
+
+        let indices = quad.indices().count();
+        pass.draw_indexed(0..indices, 0, 0..1);
     }
 }
 
@@ -137,7 +169,7 @@ fn image_pipeline(
     label_pipeline: Option<&str>,
 ) -> wgpu::RenderPipeline {
     let vs_module =
-        crate::instruments::create_simple_shader_module_desc(label_vertex, SHADER_VERTEX_QUAD);
+        crate::instruments::create_simple_shader_module_desc(label_vertex, SHADER_VERTEX);
     let vs_module = ctx.device.create_shader_module(vs_module);
 
     let filter = match filter {
@@ -160,14 +192,17 @@ fn image_pipeline(
     };
     let fs_module = ctx.device.create_shader_module(fs_module);
 
+    let vertex_layout = VertexRaw::desc();
+    let instance_layout = InstanceRaw::desc();
+
     ctx.device
         .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: label_pipeline,
             layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &vs_module,
-                entry_point: Some("vs_quad"),
-                buffers: &[],
+                entry_point: Some("vs_viewport"),
+                buffers: &[vertex_layout, instance_layout],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -205,15 +240,15 @@ impl SimpleImageRenderPipelineLayout {
     /// Create a new layout
     pub fn new(
         ctx: &GpuContext,
+        buffer_layout: &SimpleBufferBindLayout<VisibleVertex>,
         texture_layout: &SimpleTextureLayout,
-        buffer_layout: &SimpleBufferBindLayout,
     ) -> Self {
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Image Pipeline Layout"),
                 push_constant_ranges: &[],
-                bind_group_layouts: &[texture_layout, buffer_layout],
+                bind_group_layouts: &[buffer_layout, texture_layout],
             });
         Self(layout)
     }
@@ -235,14 +270,15 @@ impl LanczosImageRenderPipelineLayout {
     pub fn new(
         ctx: &GpuContext,
         texture_layout: &SimpleTextureLayout,
-        buffer_layout: &SimpleBufferBindLayout,
+        buffer_layout_vertex: &SimpleBufferBindLayout<VisibleVertex>,
+        buffer_layout_fragment: &SimpleBufferBindLayout<VisibleFragment>,
     ) -> Self {
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Lanczos Image Pipeline Layout"),
                 push_constant_ranges: &[],
-                bind_group_layouts: &[texture_layout, buffer_layout, buffer_layout],
+                bind_group_layouts: &[buffer_layout_vertex, texture_layout, buffer_layout_fragment],
             });
         Self(layout)
     }

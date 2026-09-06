@@ -1,70 +1,8 @@
 //! Definition and handling of 2d objects and their interaction
 
-use nalgebra as na;
-
 use crate::instruments::GpuContext;
-use crate::instruments::bind::physics::{InstanceRaw, VertexRaw};
-use crate::instruments::mesh::{
-    IndexBuffer,
-    IndexData,
-    InstanceBuffer,
-    InstanceData,
-    VertexBuffer,
-    VertexData,
-};
-
-/// An array-of-structs of vertex data
-#[derive(Debug)]
-pub struct Vertices(Vec<VertexRaw>);
-
-impl Vertices {
-    /// Wrap raw vertices into an vertex array
-    pub fn new(data: Vec<VertexRaw>) -> Self {
-        assert!(!data.is_empty(), "empty vertex array not allowed");
-        Self(data)
-    }
-}
-
-impl VertexData for Vertices {
-    fn data(&self) -> &[VertexRaw] {
-        &self.0
-    }
-}
-
-/// An array of triangles indexing into some [`Vertices`] array
-#[derive(Debug)]
-pub struct Triangles(Vec<na::Vector3<u32>>);
-
-impl Triangles {
-    /// Wrap triangle indices into a triangles index array
-    pub fn new(data: Vec<na::Vector3<u32>>) -> Self {
-        assert!(!data.is_empty(), "empty index array not allowed");
-        Self(data)
-    }
-}
-
-impl IndexData for Triangles {
-    fn data(&self) -> &[[u32; 3]] {
-        bytemuck::cast_slice(&self.0)
-    }
-}
-
-/// An array-of-structs of vertex data
-pub struct Instances(Vec<InstanceRaw>);
-
-impl Instances {
-    /// Wrap raw instance transforms into an instance array
-    pub const fn new(data: Vec<InstanceRaw>) -> Self {
-        assert!(!data.is_empty(), "empty instance array not allowed");
-        Self(data)
-    }
-}
-
-impl InstanceData for Instances {
-    fn data(&self) -> &[InstanceRaw] {
-        &self.0
-    }
-}
+use crate::instruments::mesh::primitives::{Instances, Triangles, Vertices};
+use crate::instruments::mesh::{IndexBuffer, InstanceBuffer, VertexBuffer};
 
 /// A simple 2d mesh representation that can be uploaded for rendering
 #[derive(Debug)]

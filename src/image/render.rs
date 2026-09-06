@@ -3,16 +3,27 @@
 use std::range::Range;
 
 use iced::wgpu;
+use nalgebra as na;
 
-use crate::image::{DrawParameters, ImageMemory};
-use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
+use crate::controls::RenderContext;
+use crate::image::{DrawParameters, Image};
+use crate::instruments::bind::image::{LanczosInfoRaw, ViewportRaw};
 use crate::instruments::bind::storage::{
     SimpleStorageTexture,
     StorageSrcDstLayout,
     StorageTextureCopyMachine,
 };
 use crate::instruments::bind::texture::{SimpleTexture, SimpleTextureLayout};
-use crate::instruments::buffer::{SimpleBuffer, SimpleBufferBind, SimpleBufferBindLayout};
+use crate::instruments::buffer::{
+    SimpleBuffer,
+    SimpleBufferBind,
+    SimpleBufferBindLayout,
+    VisibleFragment,
+    VisibleVertex,
+};
+use crate::instruments::mesh::InstanceBuffer;
+use crate::instruments::mesh::primitives::InstanceRaw;
+use crate::instruments::mesh::quad::QuadMesh;
 use crate::instruments::pipeline::filter::{
     ConvolutionPipeline,
     ConvolutionPipelineLayout,
@@ -27,7 +38,7 @@ use crate::instruments::pipeline::image::{
     SimpleImageRenderPipelineLayout,
 };
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
-use crate::instruments::viewport::Viewport;
+use crate::instruments::viewport::ViewportGui;
 use crate::instruments::{GpuContext, TargetContext, Use};
 
 /// The rendering instruments independent of any concrete image
@@ -49,8 +60,10 @@ pub struct ImageMetaInstruments {
 
     /// The universal texture layout
     texture_layout: Use<SimpleTextureLayout>,
-    /// The universal buffer bind group layout
-    buffer_layout: Use<SimpleBufferBindLayout>,
+    /// The vertex buffer bind group layout
+    buffer_layout_vertex: Use<SimpleBufferBindLayout<VisibleVertex>>,
+    /// The fragment buffer bind group layout
+    buffer_layout_fragment: Use<SimpleBufferBindLayout<VisibleFragment>>,
 
     /// The simple pipeline layout
     simple_pipeline_layout: Use<SimpleImageRenderPipelineLayout>,
@@ -63,10 +76,12 @@ pub struct ImageMetaInstruments {
     /// The pipeline to render with "lanczos" filter
     lanczos_pipeline: Use<RenderLanczosPipeline>,
 
+    /// A quad mesh that provides the base vertices during rendering
+    quad_mesh: Use<QuadMesh>,
     /// The buffer for image metadata used in all render pipelines
-    meta_buffer: Use<SimpleBufferBind<ImageMetadataRaw>>,
+    viewport_buffer: Use<SimpleBufferBind<ViewportRaw, VisibleVertex>>,
     /// The buffer for lanczos filter metadata
-    lanczos_buffer: Use<SimpleBufferBind<LanczosInfoRaw>>,
+    lanczos_buffer: Use<SimpleBufferBind<LanczosInfoRaw, VisibleFragment>>,
 }
 
 /// Public API
@@ -91,29 +106,36 @@ impl ImageMetaInstruments {
     }
 
     /// Render a new image with the provided [`ImageDataInstruments`] using "nearest" filter
-    #[expect(clippy::too_many_arguments)]
     pub fn nearest(
         &mut self,
         data: &mut ImageDataInstruments,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-        image: &ImageMemory,
+        context: &mut RenderContext,
+        image: &Image,
         params: &DrawParameters,
     ) {
+        let RenderContext {
+            ctx,
+            target,
+            passthru,
+            encoder,
+            viewport,
+        } = context;
+
         let Some(output) = data.create_output(ctx, viewport, passthru) else {
             return;
         };
 
+        self.create_quad_mesh(ctx);
         self.create_original(data, ctx, image);
-        self.create_meta_buffer(ctx, params);
+        self.create_instance(data, ctx, image);
         self.create_nearest_pipeline(ctx, target);
+        self.create_viewport_buffer(ctx, params);
 
+        let quad_mesh = self.quad_mesh.active();
         let original = data.original.active();
-        let meta_buffer = self.meta_buffer.active();
+        let instance = data.instance.active();
         let pipeline = self.nearest_pipeline.active();
+        let viewport = self.viewport_buffer.active();
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Nearest Image Render Pass"),
@@ -131,35 +153,42 @@ impl ImageMetaInstruments {
             occlusion_query_set: None,
         });
 
-        pipeline.draw(&mut pass, original, meta_buffer);
+        pipeline.draw(&mut pass, viewport, original, quad_mesh, instance);
 
         data.output = Use::Active(output);
     }
 
     /// Render a new image with the provided [`ImageDataInstruments`] using "bilinear" filter
-    #[expect(clippy::too_many_arguments)]
     pub fn bilinear(
         &mut self,
         data: &mut ImageDataInstruments,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-        image: &ImageMemory,
+        context: &mut RenderContext,
+        image: &Image,
         params: &DrawParameters,
     ) {
+        let RenderContext {
+            ctx,
+            target,
+            passthru,
+            encoder,
+            viewport,
+        } = context;
+
         let Some(output) = data.create_output(ctx, viewport, passthru) else {
             return;
         };
 
-        self.create_meta_buffer(ctx, params);
+        self.create_quad_mesh(ctx);
         self.create_original(data, ctx, image);
+        self.create_instance(data, ctx, image);
         self.create_bilinear_pipeline(ctx, target);
+        self.create_viewport_buffer(ctx, params);
 
-        let meta_buffer = self.meta_buffer.active();
+        let quad_mesh = self.quad_mesh.active();
         let original = data.original.active();
+        let instance = data.instance.active();
         let pipeline = self.bilinear_pipeline.active();
+        let viewport = self.viewport_buffer.active();
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bilinear Image Render Pass"),
@@ -177,32 +206,38 @@ impl ImageMetaInstruments {
             occlusion_query_set: None,
         });
 
-        pipeline.draw(&mut pass, original, meta_buffer);
+        pipeline.draw(&mut pass, viewport, original, quad_mesh, instance);
 
         data.output = Use::Active(output);
     }
 
     /// Render a new image with the provided [`ImageDataInstruments`] using "lanczos" filter
-    #[expect(clippy::too_many_arguments)]
     pub fn lanczos(
         &mut self,
         data: &mut ImageDataInstruments,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-        image: &ImageMemory,
+        context: &mut RenderContext,
+        image: &Image,
         params: &DrawParameters,
     ) {
+        let RenderContext {
+            ctx,
+            target,
+            passthru,
+            encoder,
+            viewport,
+        } = context;
+
         let Some(output) = data.create_output(ctx, viewport, passthru) else {
             return;
         };
 
         // Interpolate with Lanczos filter
+        self.create_quad_mesh(ctx);
+        self.create_instance(data, ctx, image);
+        self.create_viewport_buffer(ctx, params);
+
         self.create_blurred(data, ctx, encoder, image, params);
         self.create_lanczos_pipeline(ctx, target);
-        self.create_meta_buffer(ctx, params);
         self.create_lanczos_buffer(ctx, params);
 
         let blurred = if let Some(blurred) = &data.blurred.maybe_active() {
@@ -212,9 +247,11 @@ impl ImageMetaInstruments {
             data.original.active()
         };
 
+        let quad_mesh = self.quad_mesh.active();
+        let instance = data.instance.active();
         let pipeline = self.lanczos_pipeline.active();
-        let meta_buffer = self.meta_buffer.active();
         let lanczos_buffer = self.lanczos_buffer.active();
+        let viewport = self.viewport_buffer.active();
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Lanczos Image Render Pass"),
@@ -232,7 +269,14 @@ impl ImageMetaInstruments {
             occlusion_query_set: None,
         });
 
-        pipeline.draw(&mut pass, blurred, meta_buffer, lanczos_buffer);
+        pipeline.draw(
+            &mut pass,
+            viewport,
+            blurred,
+            lanczos_buffer,
+            quad_mesh,
+            instance,
+        );
 
         data.output = Use::Active(output);
     }
@@ -245,7 +289,7 @@ impl ImageMetaInstruments {
         &mut self,
         ctx: &GpuContext,
         passthru: &PassThruPipeline,
-        viewport: &Viewport,
+        viewport: &ViewportGui,
     ) -> Option<PassThruTexture> {
         let Some(extent) = viewport.extent() else {
             self.final_output = self.final_output.take().make_unused();
@@ -279,12 +323,21 @@ impl ImageMetaInstruments {
     }
 
     /// Make sure the buffer layout is available
-    fn create_buffer_layout(&mut self, ctx: &GpuContext) {
-        if self.buffer_layout.checked() {
+    fn create_buffer_layout_vertex(&mut self, ctx: &GpuContext) {
+        if self.buffer_layout_vertex.checked() {
             return;
         }
-        let out = SimpleBufferBindLayout::new(ctx, Some("Image Buffer Layout"));
-        self.buffer_layout = Use::Active(out);
+        let out = SimpleBufferBindLayout::new(ctx, Some("Image Buffer Layout Vertex"));
+        self.buffer_layout_vertex = Use::Active(out);
+    }
+
+    /// Make sure the buffer layout is available
+    fn create_buffer_layout_fragment(&mut self, ctx: &GpuContext) {
+        if self.buffer_layout_fragment.checked() {
+            return;
+        }
+        let out = SimpleBufferBindLayout::new(ctx, Some("Image Buffer Layout Fragment"));
+        self.buffer_layout_fragment = Use::Active(out);
     }
 
     /// Make sure the simple pipeline layout is available
@@ -294,12 +347,12 @@ impl ImageMetaInstruments {
         }
 
         self.create_texture_layout(ctx);
-        self.create_buffer_layout(ctx);
+        self.create_buffer_layout_vertex(ctx);
 
         let texture = self.texture_layout.active();
-        let buffer = self.buffer_layout.active();
+        let buffer = self.buffer_layout_vertex.active();
 
-        let pipeline = SimpleImageRenderPipelineLayout::new(ctx, texture, buffer);
+        let pipeline = SimpleImageRenderPipelineLayout::new(ctx, buffer, texture);
         self.simple_pipeline_layout = Use::Active(pipeline);
     }
 
@@ -330,29 +383,25 @@ impl ImageMetaInstruments {
     }
 
     /// Make sure image metadata buffer is available
-    fn create_meta_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
-        match self.meta_buffer.take() {
+    fn create_viewport_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
+        match self.viewport_buffer.take() {
             Use::Missing => {
-                self.create_buffer_layout(ctx);
-                let buffer_layout = self.buffer_layout.active();
+                self.create_buffer_layout_vertex(ctx);
+                let layout = self.buffer_layout_vertex.active();
 
-                let meta = params.raw_metadata();
-                let meta_buffer = SimpleBuffer::new(ctx, meta, Some("Image Metainfo Buffer"));
-                let meta_buffer = SimpleBufferBind::new(
-                    ctx,
-                    meta_buffer,
-                    buffer_layout,
-                    Some("Image Metainfo Binding"),
-                );
-                self.meta_buffer = Use::Active(meta_buffer);
+                let viewport = params.viewport.as_raw();
+                let buffer = SimpleBuffer::new(ctx, viewport, Some("Image Viewport Buffer"));
+                let bind =
+                    SimpleBufferBind::new(ctx, buffer, layout, Some("Image Viewport Binding"));
+                self.viewport_buffer = Use::Active(bind);
             }
-            Use::Recycle(b) | Use::Unused(b) => {
-                let meta = params.raw_metadata();
-                b.buffer().update(ctx, meta);
-                self.meta_buffer = Use::Active(b);
+            Use::Recycle(bind) | Use::Unused(bind) => {
+                let viewport = params.viewport.as_raw();
+                bind.buffer().update(ctx, viewport);
+                self.viewport_buffer = Use::Active(bind);
             }
             out @ (Use::Invalid | Use::Active(_)) => {
-                self.meta_buffer = out;
+                self.viewport_buffer = out;
             }
         }
     }
@@ -362,7 +411,7 @@ impl ImageMetaInstruments {
         &mut self,
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
-        image: &ImageMemory,
+        image: &Image,
     ) {
         if data.original.checked() {
             return;
@@ -378,6 +427,29 @@ impl ImageMetaInstruments {
             Some("Image Original Texture Bind"),
         );
         data.original = Use::Active(original);
+    }
+
+    /// Create the quad mesh (which never changes again)
+    fn create_quad_mesh(&mut self, ctx: &GpuContext) {
+        if self.quad_mesh.checked() {
+            return;
+        }
+
+        self.quad_mesh = Use::Active(QuadMesh::new(ctx));
+    }
+
+    /// Create the quad instance that transforms the quad mesh to the image size
+    #[expect(clippy::unused_self)]
+    fn create_instance(&self, data: &mut ImageDataInstruments, ctx: &GpuContext, image: &Image) {
+        if data.instance.checked() {
+            return;
+        }
+
+        let wgpu::Extent3d { width, height, .. } = image.extent();
+        let size = na::Vector2::new(width, height).cast();
+        let instance = QuadMesh::box_instance(size);
+        let instance = InstanceBuffer::upload(ctx, &instance);
+        data.instance = Use::Active(instance);
     }
 
     /// Make sure the kernel layout is available
@@ -469,7 +541,7 @@ impl ImageMetaInstruments {
         &mut self,
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
-        image: &ImageMemory,
+        image: &Image,
     ) {
         if self.copy_machine.checked() {
             return;
@@ -487,7 +559,7 @@ impl ImageMetaInstruments {
         &mut self,
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
-        image: &ImageMemory,
+        image: &Image,
     ) {
         if data.storage_data.checked() {
             return;
@@ -509,7 +581,7 @@ impl ImageMetaInstruments {
         &mut self,
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
-        image: &ImageMemory,
+        image: &Image,
     ) {
         if data.storage_scratch.checked() {
             return;
@@ -530,8 +602,8 @@ impl ImageMetaInstruments {
     fn create_lanczos_buffer(&mut self, ctx: &GpuContext, params: &DrawParameters) {
         match self.lanczos_buffer.take() {
             Use::Missing => {
-                self.create_buffer_layout(ctx);
-                let layout = self.buffer_layout.active();
+                self.create_buffer_layout_fragment(ctx);
+                let layout = self.buffer_layout_fragment.active();
                 let buffer = params.raw_lanczos();
                 let buffer = SimpleBuffer::new(ctx, buffer, Some("Image Lanczos Buffer"));
                 let buffer =
@@ -556,11 +628,14 @@ impl ImageMetaInstruments {
         }
 
         self.create_texture_layout(ctx);
-        self.create_buffer_layout(ctx);
+        self.create_buffer_layout_vertex(ctx);
+        self.create_buffer_layout_fragment(ctx);
         let texture = self.texture_layout.active();
-        let buffer = self.buffer_layout.active();
+        let buffer_vertex = self.buffer_layout_vertex.active();
+        let buffer_fragment = self.buffer_layout_fragment.active();
 
-        let pipeline = LanczosImageRenderPipelineLayout::new(ctx, texture, buffer);
+        let pipeline =
+            LanczosImageRenderPipelineLayout::new(ctx, texture, buffer_vertex, buffer_fragment);
         self.lanczos_pipeline_layout = Use::Active(pipeline);
     }
 
@@ -583,7 +658,7 @@ impl ImageMetaInstruments {
         data: &mut ImageDataInstruments,
         ctx: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
-        image: &ImageMemory,
+        image: &Image,
         params: &DrawParameters,
     ) {
         self.create_kernel_bind(data, ctx, params);
@@ -679,41 +754,33 @@ impl ImageMetaInstruments {
     /// Degrade necessary instruments to handle a replaced image
     pub fn replaced_image(&mut self) {
         self.final_output.degrade();
-        self.meta_buffer.degrade();
     }
 
     /// Degrade necessary instruments to handle a resized viewport
     pub fn resized(&mut self) {
         self.final_output.degrade();
+        self.viewport_buffer.degrade();
     }
 
     /// Degrade necessary instruments to handle a new zoom level
     pub fn zoomed(&mut self) {
         self.final_output.degrade();
-        self.meta_buffer.degrade();
+        self.viewport_buffer.degrade();
     }
 
     /// Degrade necessary instruments to handle a panned image
     pub fn panned(&mut self) {
         self.final_output.degrade();
-        self.meta_buffer.degrade();
+        self.viewport_buffer.degrade();
     }
 
     /// Degrade necessary instruments to handle a new applied filter
     pub fn cycled_filter(&mut self) {
         self.final_output.degrade();
 
-        self.storage_layout.discard();
-        self.kernel_layout.discard();
-        self.convolution_layout.discard();
         self.convolution_pipeline.discard();
         self.copy_machine.discard();
 
-        self.texture_layout.discard();
-        self.buffer_layout.discard();
-
-        self.simple_pipeline_layout.discard();
-        self.lanczos_pipeline_layout.discard();
         self.nearest_pipeline.discard();
         self.bilinear_pipeline.discard();
         self.lanczos_pipeline.discard();
@@ -729,6 +796,8 @@ pub struct ImageDataInstruments {
     output: Use<PassThruTexture>,
     /// The original image as a texture
     original: Use<SimpleTexture>,
+    /// Quad instance
+    instance: Use<InstanceBuffer<InstanceRaw>>,
 
     /// Storage data texture that fits the image
     storage_data: Use<SimpleStorageTexture>,
@@ -765,6 +834,7 @@ impl ImageDataInstruments {
     /// Degrade necessary instruments to handle a resized viewport
     pub fn resized(&mut self) {
         self.output.discard();
+        self.instance.discard();
         self.storage_data.discard();
         self.storage_scratch.discard();
         self.blurred.discard();
@@ -796,7 +866,7 @@ impl ImageDataInstruments {
     fn create_output(
         &mut self,
         ctx: &GpuContext,
-        viewport: &Viewport,
+        viewport: &ViewportGui,
         passthru: &PassThruPipeline,
     ) -> Option<PassThruTexture> {
         let Some(extent) = viewport.extent() else {

@@ -1,12 +1,15 @@
 //! Instruments to render simple 2d meshes
 
+pub mod primitives;
+pub mod quad;
+
 use std::marker::PhantomData;
 
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt as _;
 
 use crate::instruments::GpuContext;
-use crate::instruments::bind::physics::{InstanceRaw, VertexRaw};
+use crate::instruments::mesh::primitives::{InstanceRaw, VertexRaw};
 
 /// Interface to upload vertex data in the correct format
 pub trait VertexData {
@@ -18,6 +21,8 @@ pub trait VertexData {
 pub struct VertexBuffer<T: VertexData> {
     /// The handle to the buffer
     buffer: wgpu::Buffer,
+    /// Number of vertices stored
+    count: u32,
     /// Marker to associate a specific type of mesh to this vertex buffer
     _marker: PhantomData<T>,
 }
@@ -25,17 +30,26 @@ pub struct VertexBuffer<T: VertexData> {
 impl<T: VertexData> VertexBuffer<T> {
     /// Upload the vertex data by allocating a new buffer
     pub fn upload(ctx: &GpuContext, data: &T) -> Self {
+        let data = data.data();
+        let count = data.len() as u32;
         let buffer = ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(data.data()),
+                contents: bytemuck::cast_slice(data),
                 usage: wgpu::BufferUsages::VERTEX,
             });
         Self {
             buffer,
+            count,
             _marker: PhantomData,
         }
+    }
+
+    /// Get the number of indices stored in this buffer
+    #[expect(unused)]
+    pub const fn count(&self) -> u32 {
+        self.count
     }
 }
 

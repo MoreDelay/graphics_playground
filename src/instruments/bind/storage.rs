@@ -138,7 +138,7 @@ pub struct StorageTextureCopyMachine {
 
 impl StorageTextureCopyMachine {
     /// The copy machine vertex shader path
-    const SHADER_COPY_VERTEX: &str = "package::image::quad";
+    const SHADER_COPY_VERTEX: &str = "package::image::unit_quad";
     /// The copy machine fragment shader path
     const SHADER_COPY_FRAGMENT: &str = "package::mipmap::texture_copy";
 
@@ -270,7 +270,7 @@ impl StorageTextureCopyMachine {
                     layout: Some(&layout),
                     vertex: wgpu::VertexState {
                         module: &vs_module,
-                        entry_point: Some("vs_quad"),
+                        entry_point: Some("vs_unit_quad"),
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         buffers: &[],
                     },
@@ -301,7 +301,7 @@ impl StorageTextureCopyMachine {
                     layout: Some(&layout),
                     vertex: wgpu::VertexState {
                         module: &vs_module,
-                        entry_point: Some("vs_quad"),
+                        entry_point: Some("vs_unit_quad"),
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         buffers: &[],
                     },

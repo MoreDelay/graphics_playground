@@ -1,15 +1,21 @@
 //! Bind groups related to image rendering
 
-/// Raw image metadata for shaders
+/// Viewport transform matrix
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ImageMetadataRaw {
-    /// (width, height) of the visible area
-    pub start: [f32; 2],
-    /// zoom of image (greater than 1 means magnification)
-    pub zoom: f32,
-    /// padding to get to a multiple of alignment bytes (8)
-    pub _pad: u32,
+pub struct ViewportRaw {
+    /// vector 0 of column-major homogeneous transformation matrix
+    pub view0: [f32; 3],
+    /// padding 0
+    pub _pad0: u32,
+    /// vector 1 of column-major homogeneous transformation matrix
+    pub view1: [f32; 3],
+    /// padding 1
+    pub _pad1: u32,
+    /// vector 2 of column-major homogeneous transformation matrix
+    pub view2: [f32; 3],
+    /// padding 2
+    pub _pad2: u32,
 }
 
 /// Raw lanczos metadata for shaders

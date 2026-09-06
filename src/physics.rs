@@ -1,16 +1,30 @@
 //! Contains the 2d physics simulation widget
 
 use iced::wgpu;
+use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
-use crate::instruments::bind::physics::{CameraInfoRaw, InstanceRaw, VertexRaw};
-use crate::instruments::buffer::{SimpleBuffer, SimpleBufferBind, SimpleBufferBindLayout};
+use crate::controls::RenderContext;
+use crate::instruments::bind::image::ViewportRaw;
+use crate::instruments::buffer::{
+    SimpleBuffer,
+    SimpleBufferBind,
+    SimpleBufferBindLayout,
+    VisibleVertex,
+};
 use crate::instruments::mesh::InstanceBuffer;
+use crate::instruments::mesh::primitives::{
+    InstanceRaw,
+    Instances,
+    Triangles,
+    VertexRaw,
+    Vertices,
+};
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::pipeline::physics::{PhysicsObjectPipeline, PhysicsObjectPipelineLayout};
-use crate::instruments::viewport::Viewport;
+use crate::instruments::viewport::{ScrollableViewportState, ViewportGui};
 use crate::instruments::{GpuContext, TargetContext, Use};
-use crate::model::{Instances, MeshCpu, MeshInstancing, SingleMeshInstancing, Triangles, Vertices};
+use crate::model::{MeshCpu, MeshInstancing, SingleMeshInstancing};
 
 /// The 2d physics simulation widget
 pub struct PhysicsWidget {
@@ -18,14 +32,17 @@ pub struct PhysicsWidget {
     instruments: PhysicsInstruments,
     /// The current simulation state
     state: SimulationState,
-    /// The size of the visible area
-    size: na::Vector2<f32>,
+    /// The state of the viewport that is currently shown
+    viewport: ScrollableViewportState,
 }
 
 impl PhysicsWidget {
     /// Create a new physics widget
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
-        let size = na::Vector2::new(10., 10.);
+        let size = na::Vector2::new(2., 2.);
+        let view = PhysicalSize::new(1, 1);
+        let viewport = ScrollableViewportState::new(size, view, 100.);
+
         let state = SimulationState::init(size);
         let rect_instances: Vec<_> = state
             .moving
@@ -41,28 +58,37 @@ impl PhysicsWidget {
         let rect = Rectangle::mesh().upload(ctx);
         let rect = SingleMeshInstancing::new(rect, rect_instances);
         instancing.push(rect);
-        let instruments = PhysicsInstruments::new(ctx, target, instancing, size);
+        let instruments = PhysicsInstruments::new(ctx, target, instancing);
 
         Self {
             instruments,
             state,
-            size,
+            viewport,
         }
     }
 
     /// Render the current state of objects
-    pub fn render(
-        &mut self,
-        ctx: &GpuContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-    ) -> Option<&PassThruTexture> {
+    pub fn render(&mut self, context: &mut RenderContext) -> Option<&PassThruTexture> {
         if self.instruments.final_output().is_some() {
             return self.instruments.final_output();
         }
 
+        let RenderContext {
+            ctx,
+            passthru,
+            encoder,
+            viewport,
+            ..
+        } = context;
+
+        let size_updated = self.viewport.resize_view(viewport.size());
+        if size_updated {
+            self.instruments.camera.degrade();
+        }
+        self.instruments.create_camera(ctx, &self.viewport);
+
         let output = self.instruments.create_output(ctx, passthru, viewport)?;
+        let camera = self.instruments.camera.active();
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Physics Render Pass"),
@@ -80,11 +106,9 @@ impl PhysicsWidget {
             occlusion_query_set: None,
         });
 
-        self.instruments.pipeline.draw(
-            &mut pass,
-            &self.instruments.camera,
-            &self.instruments.moving,
-        );
+        self.instruments
+            .pipeline
+            .draw(&mut pass, camera, &self.instruments.moving);
 
         Some(self.instruments.set_final_output(output))
     }
@@ -94,7 +118,7 @@ impl PhysicsWidget {
         match message {
             PhysicsMessage::Reset => {
                 self.instruments.final_output.degrade();
-                self.state = SimulationState::init(self.size);
+                self.state = SimulationState::init(self.viewport.area());
             }
             PhysicsMessage::Tick => self.tick(),
         }
@@ -146,13 +170,11 @@ impl SimulationState {
         });
         let fixed = vec![edge_left, edge_right, edge_top, edge_bottom];
 
-        let shape = MovingShape::Rectangle(Rectangle {
-            size: na::Vector2::new(0.5, 0.3),
-            rotation: 0.,
-            center: na::Point2::new(1.0, 1.0),
-        });
+        let size = na::Vector2::new(0.5, 0.3);
+        let rotation = 0.;
+        let center = na::Point2::new(1.0, 1.0);
         let square = MovingBody {
-            shape,
+            shape: MovingShape::Rectangle(Rectangle::new(size, rotation, center)),
             velocity: na::Vector2::zeros(),
             angular_velocity: 0.,
         };
@@ -216,6 +238,15 @@ pub struct Rectangle {
 }
 
 impl Rectangle {
+    /// Create a new rectangle with the provided size and pose
+    pub const fn new(size: na::Vector2<f32>, rotation: f32, center: na::Point2<f32>) -> Self {
+        Self {
+            size,
+            rotation,
+            center,
+        }
+    }
+
     /// Create the base mesh for a rectangle
     ///
     /// This mesh has its vertices at x, y in {-1, 1}. These should be transformed by the instance
@@ -226,10 +257,10 @@ impl Rectangle {
         let blue = [0., 0., 1.];
         let white = [1., 1., 1.];
 
-        let nw = VertexRaw::new([-1., 1.], red);
-        let ne = VertexRaw::new([1., 1.], green);
-        let sw = VertexRaw::new([-1., -1.], blue);
-        let se = VertexRaw::new([1., -1.], white);
+        let nw = VertexRaw::new([-1., 1.], [0., 0.], red);
+        let ne = VertexRaw::new([1., 1.], [1., 0.], green);
+        let sw = VertexRaw::new([-1., -1.], [0., 1.], blue);
+        let se = VertexRaw::new([1., -1.], [1., 1.], white);
 
         let vertices = vec![nw, ne, sw, se];
         let vertices = Vertices::new(vertices);
@@ -244,14 +275,16 @@ impl Rectangle {
 
     /// Create an instance transform for this rectangle
     pub fn instance(&self) -> InstanceRaw {
-        let stretch = na::Matrix2::from_diagonal(&self.size);
+        let stretch = na::Matrix2::from_diagonal(&(self.size / 2.));
         let transform = na::Rotation2::new(self.rotation) * stretch;
+
         let model0 = transform.column(0).to_homogeneous();
         let model1 = transform.column(1).to_homogeneous();
-        let model2 = na::Vector3::new(self.center.x, self.center.y, 1.);
-        let model0 = bytemuck::cast(model0);
-        let model1 = bytemuck::cast(model1);
-        let model2 = bytemuck::cast(model2);
+        let model2 = na::Point2::from(self.center).to_homogeneous();
+
+        let model0 = model0.into();
+        let model1 = model1.into();
+        let model2 = model2.into();
         InstanceRaw::new(model0, model1, model2)
     }
 }
@@ -266,32 +299,17 @@ struct PhysicsInstruments {
     /// Objects influenced by physics
     moving: MeshInstancing,
     /// Buffer holding the camera location
-    camera: SimpleBufferBind<CameraInfoRaw>,
+    camera: Use<SimpleBufferBind<ViewportRaw, VisibleVertex>>,
 }
 
 impl PhysicsInstruments {
     /// Create a new set of rendering instruments for the physics widget
-    fn new(
-        ctx: &GpuContext,
-        target: &TargetContext,
-        moving: MeshInstancing,
-        size: na::Vector2<f32>,
-    ) -> Self {
+    fn new(ctx: &GpuContext, target: &TargetContext, moving: MeshInstancing) -> Self {
         let buffer_layout = SimpleBufferBindLayout::new(ctx, Some("Physics Buffer Layout"));
         let layout = PhysicsObjectPipelineLayout::new(ctx, &buffer_layout);
         let pipeline = PhysicsObjectPipeline::new(ctx, &layout, target.config.format);
 
-        let camera = CameraInfoRaw {
-            start: [0., 0.],
-            size: size.into(),
-        };
-        let camera = SimpleBuffer::new(ctx, camera, Some("Physics Camera Buffer"));
-        let camera = SimpleBufferBind::new(
-            ctx,
-            camera,
-            &buffer_layout,
-            Some("Physics Camera Buffer Bind"),
-        );
+        let camera = Use::default();
 
         Self {
             final_output: Use::default(),
@@ -320,7 +338,7 @@ impl PhysicsInstruments {
         &mut self,
         ctx: &GpuContext,
         passthru: &PassThruPipeline,
-        viewport: &Viewport,
+        viewport: &ViewportGui,
     ) -> Option<PassThruTexture> {
         let Some(extent) = viewport.extent() else {
             self.final_output = self.final_output.take().make_unused();
@@ -341,5 +359,24 @@ impl PhysicsInstruments {
                 Some(passthru.create_texture(ctx, extent))
             }
         }
+    }
+
+    /// Create or update the camera transform
+    pub fn create_camera(&mut self, ctx: &GpuContext, viewport: &ScrollableViewportState) {
+        let camera = match self.camera.take() {
+            Use::Missing | Use::Invalid => {
+                let layout = SimpleBufferBindLayout::new(ctx, Some("Physics Buffer Layout"));
+                let camera = viewport.as_raw();
+                let camera = SimpleBuffer::new(ctx, camera, Some("Physics Camera Buffer"));
+                SimpleBufferBind::new(ctx, camera, &layout, Some("Physics Camera Buffer Bind"))
+            }
+            Use::Active(camera) => camera,
+            Use::Recycle(camera) | Use::Unused(camera) => {
+                let data = viewport.as_raw();
+                camera.buffer().update(ctx, data);
+                camera
+            }
+        };
+        self.camera = Use::Active(camera);
     }
 }

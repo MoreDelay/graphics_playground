@@ -1,16 +1,9 @@
-//! Bindings used for physics sim
+//! Defines structs for primitve data types for defining meshes, such as vertices or indices.
 
 use iced::wgpu;
+use nalgebra as na;
 
-/// Raw image metadata for shaders
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CameraInfoRaw {
-    /// (x, y) of bottom left corner of visible area
-    pub start: [f32; 2],
-    /// (width, height) of the visible area
-    pub size: [f32; 2],
-}
+use crate::instruments::mesh::{IndexData, InstanceData, VertexData};
 
 /// The format expected by shaders
 #[repr(C)]
@@ -18,24 +11,24 @@ pub struct CameraInfoRaw {
 pub struct VertexRaw {
     /// The position coordinates of this vertex
     pub pos: [f32; 2],
-    /// Padding to satisfy wgpu alignment constraints
-    pub _pad1: [u32; 2],
+    /// UV coordinates at this vertex
+    pub uv: [f32; 2],
     /// The color of this vertex
     pub color: [f32; 3],
     /// Padding to satisfy wgpu alignment constraints
-    pub _pad2: u32,
+    pub _pad: u32,
 }
 
 impl VertexRaw {
     /// Create a new raw vertex
     ///
     /// Just a helper to eliminate noise about the padding
-    pub const fn new(pos: [f32; 2], color: [f32; 3]) -> Self {
+    pub const fn new(pos: [f32; 2], uv: [f32; 2], color: [f32; 3]) -> Self {
         Self {
             pos,
-            _pad1: [0, 0],
+            uv,
             color,
-            _pad2: 0,
+            _pad: 0,
         }
     }
 
@@ -51,8 +44,13 @@ impl VertexRaw {
                     format: wgpu::VertexFormat::Float32x2,
                 },
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                     shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    shader_location: 2,
                     format: wgpu::VertexFormat::Float32x3,
                 },
             ],
@@ -102,20 +100,79 @@ impl InstanceRaw {
             attributes: &[
                 wgpu::VertexAttribute {
                     offset: 0,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
                     shader_location: 3,
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
                     shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+                    shader_location: 5,
                     format: wgpu::VertexFormat::Float32x3,
                 },
             ],
         }
+    }
+}
+
+impl InstanceData for InstanceRaw {
+    fn data(&self) -> &[InstanceRaw] {
+        std::slice::from_ref(self)
+    }
+}
+
+/// An array-of-structs of vertex data
+#[derive(Debug)]
+pub struct Vertices(Vec<VertexRaw>);
+
+impl Vertices {
+    /// Wrap raw vertices into an vertex array
+    pub fn new(data: Vec<VertexRaw>) -> Self {
+        assert!(!data.is_empty(), "empty vertex array not allowed");
+        Self(data)
+    }
+}
+
+impl VertexData for Vertices {
+    fn data(&self) -> &[VertexRaw] {
+        &self.0
+    }
+}
+
+/// An array of triangles indexing into some [`Vertices`] array
+#[derive(Debug)]
+pub struct Triangles(Vec<na::Vector3<u32>>);
+
+impl Triangles {
+    /// Wrap triangle indices into a triangles index array
+    pub fn new(data: Vec<na::Vector3<u32>>) -> Self {
+        assert!(!data.is_empty(), "empty index array not allowed");
+        Self(data)
+    }
+}
+
+impl IndexData for Triangles {
+    fn data(&self) -> &[[u32; 3]] {
+        bytemuck::cast_slice(&self.0)
+    }
+}
+
+/// An array-of-structs of vertex data
+pub struct Instances(Vec<InstanceRaw>);
+
+impl Instances {
+    /// Wrap raw instance transforms into an instance array
+    pub const fn new(data: Vec<InstanceRaw>) -> Self {
+        assert!(!data.is_empty(), "empty instance array not allowed");
+        Self(data)
+    }
+}
+
+impl InstanceData for Instances {
+    fn data(&self) -> &[InstanceRaw] {
+        &self.0
     }
 }

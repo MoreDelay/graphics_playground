@@ -22,6 +22,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::Key;
 use winit::window::WindowAttributes;
 
+use crate::controls::coords::Physical;
 use crate::controls::{Controls, Message};
 use crate::instruments::{GpuContext, TargetContext};
 
@@ -389,7 +390,7 @@ impl Ready {
     /// Handle when the cursor moved
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) -> ControlFlow<()> {
         let PhysicalPosition { x, y } = position.cast();
-        let position = na::Point2::new(x, y);
+        let position = Physical(na::Point2::new(x, y));
         let message = Message::CursorMoved(position);
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)

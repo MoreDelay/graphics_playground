@@ -54,19 +54,21 @@ impl<R: BufferRaw> SimpleBuffer<R> {
 }
 
 /// A bind group for a uniform buffer
-pub struct SimpleBufferBind<R: BufferRaw> {
+pub struct SimpleBufferBind<R: BufferRaw, V: Visibility> {
     /// The buffer used in the binding
     buffer: SimpleBuffer<R>,
     /// The bind group
     bind: wgpu::BindGroup,
+    /// Marker for visibility
+    _marker: PhantomData<V>,
 }
 
-impl<R: BufferRaw> SimpleBufferBind<R> {
+impl<R: BufferRaw, V: Visibility> SimpleBufferBind<R, V> {
     /// Create a new binding
     pub fn new(
         ctx: &GpuContext,
         buffer: SimpleBuffer<R>,
-        layout: &SimpleBufferBindLayout,
+        layout: &SimpleBufferBindLayout<V>,
         label: Option<&str>,
     ) -> Self {
         let bind = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -77,7 +79,12 @@ impl<R: BufferRaw> SimpleBufferBind<R> {
                 resource: buffer.resource(),
             }],
         });
-        Self { buffer, bind }
+
+        Self {
+            buffer,
+            bind,
+            _marker: PhantomData,
+        }
     }
 
     /// Access the buffer of this binding
@@ -86,7 +93,7 @@ impl<R: BufferRaw> SimpleBufferBind<R> {
     }
 }
 
-impl<R: BufferRaw> std::ops::Deref for SimpleBufferBind<R> {
+impl<R: BufferRaw, V: Visibility> std::ops::Deref for SimpleBufferBind<R, V> {
     type Target = wgpu::BindGroup;
 
     fn deref(&self) -> &Self::Target {
@@ -95,9 +102,9 @@ impl<R: BufferRaw> std::ops::Deref for SimpleBufferBind<R> {
 }
 
 /// The layout for [`SimpleBufferBind`]
-pub struct SimpleBufferBindLayout(wgpu::BindGroupLayout);
+pub struct SimpleBufferBindLayout<V: Visibility>(wgpu::BindGroupLayout, PhantomData<V>);
 
-impl SimpleBufferBindLayout {
+impl<V: Visibility> SimpleBufferBindLayout<V> {
     /// Create a new layout
     pub fn new(ctx: &GpuContext, label: Option<&str>) -> Self {
         let layout = ctx
@@ -106,7 +113,7 @@ impl SimpleBufferBindLayout {
                 label,
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    visibility: V::visibility(),
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -115,14 +122,46 @@ impl SimpleBufferBindLayout {
                     count: None,
                 }],
             });
-        Self(layout)
+        Self(layout, PhantomData)
     }
 }
 
-impl std::ops::Deref for SimpleBufferBindLayout {
+impl<V: Visibility> std::ops::Deref for SimpleBufferBindLayout<V> {
     type Target = wgpu::BindGroupLayout;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+/// Defines the set of visibility markers
+///
+/// The ZST's implementing this describe on which stage a buffer is visible in the shader.
+pub trait Visibility {
+    /// Get the stage of this visibility
+    fn visibility() -> wgpu::ShaderStages;
+}
+
+/// Visibility marker for just the vertex stage
+pub struct VisibleVertex;
+/// Visibility marker for just the fragment stage
+pub struct VisibleFragment;
+/// Visibility marker for both the vertex and fragment stage
+#[expect(unused)]
+pub struct VisibleBoth;
+
+impl Visibility for VisibleVertex {
+    fn visibility() -> wgpu::ShaderStages {
+        wgpu::ShaderStages::VERTEX
+    }
+}
+impl Visibility for VisibleFragment {
+    fn visibility() -> wgpu::ShaderStages {
+        wgpu::ShaderStages::FRAGMENT
+    }
+}
+impl Visibility for VisibleBoth {
+    fn visibility() -> wgpu::ShaderStages {
+        wgpu::ShaderStages::VERTEX_FRAGMENT
     }
 }

@@ -10,16 +10,16 @@ use iced_wgpu::core::SmolStr;
 use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
-use crate::controls::coords::{LocalPoint, LocalVector};
+use crate::controls::RenderContext;
 use crate::image::filters::GaussFilter;
 use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
-use crate::instruments::bind::image::{ImageMetadataRaw, LanczosInfoRaw};
+use crate::instruments::GpuContext;
+use crate::instruments::bind::image::LanczosInfoRaw;
 use crate::instruments::mipmap::MipMapper;
 use crate::instruments::pipeline::ImageFilter;
-use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
+use crate::instruments::pipeline::passthru::PassThruTexture;
 use crate::instruments::splitview::draw_splitted;
-use crate::instruments::viewport::Viewport;
-use crate::instruments::{GpuContext, TargetContext};
+use crate::instruments::viewport::ScrollableViewportState;
 
 /// The image viewer widget
 pub struct ImageWidget {
@@ -42,18 +42,21 @@ pub struct ImageWidget {
 impl ImageWidget {
     /// The (exponential) factor by which the zoom changes per scroll tick
     const SCALE_INCREASE_FACTOR: f32 = 1.2;
-    /// The limit for magnification
-    const ZOOM_MAX: f32 = 100.0;
-    /// The limit for minification
-    const ZOOM_MIN: f32 = 0.05;
 
     /// Create a new image viewer widget
     pub fn new() -> Self {
+        let area = na::Vector2::new(1., 1.);
+        let view = PhysicalSize::new(1, 1);
+        let params = DrawParameters {
+            viewport: ScrollableViewportState::new(area, view, 1.),
+            filter: ImageFilter::default(),
+        };
+
         Self {
             meta: ImageMetaInstruments::new(),
             left: None,
             right: None,
-            params: DrawParameters::default(),
+            params,
             split: Split::default(),
             panning: false,
         }
@@ -63,7 +66,7 @@ impl ImageWidget {
     pub const fn split(&self) -> Option<SplitReaction> {
         let got_two = self.left.is_some() && self.right.is_some();
         if got_two {
-            let width = self.params.viewport.width as f32;
+            let width = self.params.viewport.size().width as f32;
             let split = self.split.clamped(width);
             let react = matches!(self.split, Split::Dragging(..)) || !self.panning;
             let reaction = SplitReaction { split, react };
@@ -74,14 +77,7 @@ impl ImageWidget {
     }
 
     /// Get the latest rendering result
-    pub fn render(
-        &mut self,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-    ) -> Option<&PassThruTexture> {
+    pub fn render(&mut self, context: &mut RenderContext) -> Option<&PassThruTexture> {
         if self.meta.final_output().is_some() {
             return self.meta.final_output();
         }
@@ -89,12 +85,20 @@ impl ImageWidget {
         let params = self.params;
 
         match self.params.filter {
-            ImageFilter::Nearest => self.nearest(ctx, target, passthru, encoder, viewport, &params),
+            ImageFilter::Nearest => self.nearest(context, &params),
             ImageFilter::BiLinear => {
-                self.bilinear(ctx, target, passthru, encoder, viewport, &params);
+                self.bilinear(context, &params);
             }
-            ImageFilter::Lanczos => self.lanczos(ctx, target, passthru, encoder, viewport, &params),
+            ImageFilter::Lanczos => self.lanczos(context, &params),
         }
+
+        let RenderContext {
+            ctx,
+            passthru,
+            encoder,
+            viewport,
+            ..
+        } = context;
 
         let output = self.meta.create_output(ctx, passthru, viewport)?;
 
@@ -107,7 +111,7 @@ impl ImageWidget {
             (Some(left), Some(right)) => {
                 let left = left.instruments.output()?;
                 let right = right.instruments.output()?;
-                let width = params.viewport.width as f32;
+                let width = params.viewport.size().width as f32;
                 draw_splitted(
                     passthru,
                     encoder,
@@ -150,118 +154,46 @@ impl ImageWidget {
     }
 
     /// Render with the "nearest" filter
-    fn nearest(
-        &mut self,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-        params: &DrawParameters,
-    ) {
+    fn nearest(&mut self, context: &mut RenderContext, params: &DrawParameters) {
         if let Some(image) = &mut self.left {
-            self.meta.nearest(
-                &mut image.instruments,
-                ctx,
-                target,
-                passthru,
-                encoder,
-                viewport,
-                &image.data,
-                params,
-            );
+            self.meta
+                .nearest(&mut image.instruments, context, &image.data, params);
         }
 
         if let Some(image) = &mut self.right {
-            self.meta.nearest(
-                &mut image.instruments,
-                ctx,
-                target,
-                passthru,
-                encoder,
-                viewport,
-                &image.data,
-                params,
-            );
+            self.meta
+                .nearest(&mut image.instruments, context, &image.data, params);
         }
     }
 
     /// Render with the "bilinear" filter
-    fn bilinear(
-        &mut self,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-        params: &DrawParameters,
-    ) {
+    fn bilinear(&mut self, context: &mut RenderContext, params: &DrawParameters) {
         if let Some(image) = &mut self.left {
-            self.meta.bilinear(
-                &mut image.instruments,
-                ctx,
-                target,
-                passthru,
-                encoder,
-                viewport,
-                &image.data,
-                params,
-            );
+            self.meta
+                .bilinear(&mut image.instruments, context, &image.data, params);
         }
 
         if let Some(image) = &mut self.right {
-            self.meta.bilinear(
-                &mut image.instruments,
-                ctx,
-                target,
-                passthru,
-                encoder,
-                viewport,
-                &image.data,
-                params,
-            );
+            self.meta
+                .bilinear(&mut image.instruments, context, &image.data, params);
         }
     }
 
     /// Render with the "lanczos" filter
-    fn lanczos(
-        &mut self,
-        ctx: &GpuContext,
-        target: &TargetContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-        params: &DrawParameters,
-    ) {
+    fn lanczos(&mut self, context: &mut RenderContext, params: &DrawParameters) {
         if let Some(image) = &mut self.left {
-            self.meta.lanczos(
-                &mut image.instruments,
-                ctx,
-                target,
-                passthru,
-                encoder,
-                viewport,
-                &image.data,
-                params,
-            );
+            self.meta
+                .lanczos(&mut image.instruments, context, &image.data, params);
         }
 
         if let Some(image) = &mut self.right {
-            self.meta.lanczos(
-                &mut image.instruments,
-                ctx,
-                target,
-                passthru,
-                encoder,
-                viewport,
-                &image.data,
-                params,
-            );
+            self.meta
+                .lanczos(&mut image.instruments, context, &image.data, params);
         }
     }
 
     /// Update the image
-    fn set_image(&mut self, image: ImageMemory) {
+    fn set_image(&mut self, image: Image) {
         self.meta.replaced_image();
         if let Some(left) = &mut self.left {
             left.instruments.replaced_image();
@@ -273,15 +205,14 @@ impl ImageWidget {
         std::mem::swap(&mut self.left, &mut self.right);
         self.left = Some(SingleImageState::new(image));
 
-        let mid = self.params.viewport.width / 2;
-        self.split = Split::Set(ClampedSplit::Split(mid as f32));
+        self.split = Split::Set(ClampedSplit::Split(0.));
 
-        let default = DrawParameters::default();
-        self.params = DrawParameters {
-            offset: default.offset,
-            zoom: default.zoom,
-            ..self.params
-        };
+        let left = self.left.as_ref().map_or_default(|v| v.data.size());
+        let right = self.right.as_ref().map_or_default(|v| v.data.size());
+        let area = left.max(right).cast();
+        let area = na::Vector2::new(area.width, area.height);
+
+        self.params.viewport.resize_area(area);
     }
 
     /// Update the viewport size
@@ -294,7 +225,7 @@ impl ImageWidget {
             right.instruments.resized();
         }
 
-        self.params.viewport = size;
+        self.params.viewport.resize_view(size);
 
         if let Split::Set(split) = self.split {
             self.split = Split::Set(split.clamped(size.width as f32));
@@ -302,19 +233,19 @@ impl ImageWidget {
     }
 
     /// Handle zoom in
-    fn zoom_in(&mut self, fix_point: LocalPoint) {
-        let zoom = self.params.zoom * Self::SCALE_INCREASE_FACTOR;
+    fn zoom_in(&mut self, fix_point: na::Point2<f32>) {
+        let zoom = self.params.viewport.zoom() * Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
     }
 
     /// Handle zoom out
-    fn zoom_out(&mut self, fix_point: LocalPoint) {
-        let zoom = self.params.zoom / Self::SCALE_INCREASE_FACTOR;
+    fn zoom_out(&mut self, fix_point: na::Point2<f32>) {
+        let zoom = self.params.viewport.zoom() / Self::SCALE_INCREASE_FACTOR;
         self.set_zoom(zoom, fix_point);
     }
 
     /// Handle zoom change
-    fn set_zoom(&mut self, zoom: f32, fix_point: LocalPoint) {
+    fn set_zoom(&mut self, zoom: f32, fix_point: na::Point2<f32>) {
         self.meta.zoomed();
         if let Some(left) = &mut self.left {
             left.instruments.zoomed();
@@ -323,30 +254,15 @@ impl ImageWidget {
             right.instruments.zoomed();
         }
 
-        let zoom = zoom.clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
-
-        // get offset in fix-point coordinates (where fix-point is the origin)
-        let offset = self.params.offset - fix_point.coords;
-
-        // scale up offset position by actual difference of scale factor
-        let factor = zoom / self.params.zoom;
-        let offset = offset * factor;
-
-        // return back to viewport coordinates
-        let offset = offset + fix_point.coords;
-
-        self.params.offset = offset;
-        self.params.zoom = zoom;
-
-        // when the image is at the border, it might move out of frame by zooming
-        self.clamp_offset();
+        self.params.viewport.set_zoom(zoom, fix_point);
     }
 
     /// Handle panning of images
-    fn pan(&mut self, offset: LocalVector) {
+    fn pan(&mut self, pan_vector: na::Vector2<f32>) {
+        self.meta.panned();
+
         match self.split {
             Split::Set(_) => {
-                self.meta.panned();
                 if let Some(left) = &mut self.left {
                     left.instruments.panned();
                 }
@@ -354,14 +270,11 @@ impl ImageWidget {
                     right.instruments.panned();
                 }
 
-                self.params.offset += *offset;
-                self.clamp_offset();
+                self.params.viewport.scroll(pan_vector);
             }
             Split::Dragging(pos) => {
                 // only final image is out-of-date
-                self.meta.panned();
-
-                let x = offset.x;
+                let x = pan_vector.x;
                 self.split = Split::Dragging(pos + x);
             }
         }
@@ -377,7 +290,7 @@ impl ImageWidget {
             right.instruments.panned();
         }
 
-        self.params.offset = na::Vector2::zeros();
+        self.params.viewport.reset_position();
     }
 
     /// Cycle to the next filter to be used when requesting a rendering
@@ -400,7 +313,7 @@ impl ImageWidget {
 
     /// Update whether the split is being dragged
     const fn drag_split(&mut self, active: bool) {
-        let width = self.params.viewport.width as f32;
+        let width = self.params.viewport.size().width as f32;
         self.split = match active {
             true => self.split.dragging(width),
             false => Split::Set(self.split.clamped(width)),
@@ -412,40 +325,10 @@ impl ImageWidget {
         self.panning = active;
     }
 
-    /// Make sure that at least 10% of the viewport area shows part of the image.
-    fn clamp_offset(&mut self) {
-        const FILLED_PERCENT: f32 = 0.1;
-
-        let viewport = self.params.viewport;
-
-        let left = self
-            .left
-            .as_ref()
-            .map_or_else(PhysicalSize::default, |i| i.data.size());
-        let right = self
-            .right
-            .as_ref()
-            .map_or_else(PhysicalSize::default, |i| i.data.size());
-        let size = left.max(right);
-
-        let width = viewport.width as f32;
-        let height = viewport.height as f32;
-
-        let x_min = width.mul_add(FILLED_PERCENT, -self.params.zoom * size.width as f32);
-        let x_max = width * (1. - FILLED_PERCENT);
-        let x = self.params.offset.x.clamp(x_min, x_max);
-
-        let y_min = height.mul_add(FILLED_PERCENT, -self.params.zoom * size.height as f32);
-        let y_max = height * (1. - FILLED_PERCENT);
-        let y = self.params.offset.y.clamp(y_min, y_max);
-
-        self.params.offset = na::Vector2::new(x, y);
-    }
-
     /// Get the location of the viewport middle
-    fn viewport_mid(&self) -> LocalPoint {
-        let PhysicalSize { width, height } = self.params.viewport.cast::<f32>();
-        LocalPoint::wrap(na::Point2::new(width / 2., height / 2.))
+    fn viewport_mid(&self) -> na::Point2<f32> {
+        let PhysicalSize { width, height } = self.params.viewport.size().cast::<f32>();
+        na::Point2::new(width / 2., height / 2.)
     }
 }
 
@@ -473,9 +356,9 @@ impl Split {
     const fn dragging(self, width: f32) -> Self {
         match self {
             Self::Dragging(pos) => Self::Dragging(pos),
-            Self::Set(ClampedSplit::FullLeft) => Self::Dragging(0.),
+            Self::Set(ClampedSplit::FullLeft) => Self::Dragging(-width / 2.),
             Self::Set(ClampedSplit::Split(pos)) => Self::Dragging(pos),
-            Self::Set(ClampedSplit::FullRight) => Self::Dragging(width),
+            Self::Set(ClampedSplit::FullRight) => Self::Dragging(width / 2.),
         }
     }
 }
@@ -506,9 +389,10 @@ impl ClampedSplit {
 
     /// Make sure the split is clamped, respecting the provided width
     const fn clamped(self, width: f32) -> Self {
+        let half = width / 2.;
         match self {
-            Self::Split(pos) if pos <= 0. => Self::FullLeft,
-            Self::Split(pos) if pos >= width => Self::FullRight,
+            Self::Split(pos) if pos <= -half => Self::FullLeft,
+            Self::Split(pos) if pos >= half => Self::FullRight,
             keep @ (Self::Split(_) | Self::FullLeft | Self::FullRight) => keep,
         }
     }
@@ -526,14 +410,14 @@ pub struct SplitReaction {
 /// The rendering state for a single image
 struct SingleImageState {
     /// The loaded image in memory
-    data: ImageMemory,
+    data: Image,
     /// Rendering instruments for this image
     instruments: ImageDataInstruments,
 }
 
 impl SingleImageState {
     /// Create a new image state
-    pub fn new(data: ImageMemory) -> Self {
+    pub fn new(data: Image) -> Self {
         let instruments = ImageDataInstruments::new();
         Self { data, instruments }
     }
@@ -543,17 +427,17 @@ impl SingleImageState {
 #[derive(Clone)]
 pub enum ImageMessage {
     /// Display a new image
-    SetImage(ImageMemory),
+    SetImage(Image),
     /// The viewport has a new size
     ResizedViewport(PhysicalSize<u32>),
     /// Move the image within the viewport
-    Pan(LocalVector),
+    Pan(na::Vector2<f32>),
     /// Set a new zoom level
     SetZoom {
         /// The cursor location if available
         ///
         /// This point will stay fixed
-        cursor: Option<LocalPoint>,
+        cursor: Option<na::Point2<f32>>,
         /// The target zoom level
         zoom: f32,
     },
@@ -562,14 +446,14 @@ pub enum ImageMessage {
         /// The cursor location if available
         ///
         /// This point will stay fixed
-        cursor: Option<LocalPoint>,
+        cursor: Option<na::Point2<f32>>,
     },
     /// Zoom out (minify)
     ZoomOut {
         /// The cursor location if available
         ///
         /// This point will stay fixed
-        cursor: Option<LocalPoint>,
+        cursor: Option<na::Point2<f32>>,
     },
     /// Reset the image position in the viewport
     ResetPosition,
@@ -621,7 +505,7 @@ impl std::fmt::Debug for ImageMessage {
 
 impl ImageMessage {
     /// Create an image message given a specific key was pressed
-    pub fn from_key(key: &SmolStr, cursor: Option<LocalPoint>) -> Option<Self> {
+    pub fn from_key(key: &SmolStr, cursor: Option<na::Point2<f32>>) -> Option<Self> {
         match key.as_str() {
             "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
             "2" => Some(Self::SetZoom { cursor, zoom: 2. }),
@@ -637,14 +521,14 @@ impl ImageMessage {
 
 /// Image data in memory
 #[derive(Debug, Clone)]
-pub struct ImageMemory {
+pub struct Image {
     /// The image's pixel data
     image: image::RgbaImage,
     /// The color format to be used during rendering
     format: wgpu::TextureFormat,
 }
 
-impl ImageMemory {
+impl Image {
     /// The default color format for normal images
     pub const FORMAT_SRGB: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
@@ -733,7 +617,7 @@ impl ImageMemory {
     }
 }
 
-impl std::ops::Deref for ImageMemory {
+impl std::ops::Deref for Image {
     type Target = image::RgbaImage;
 
     fn deref(&self) -> &Self::Target {
@@ -744,12 +628,9 @@ impl std::ops::Deref for ImageMemory {
 /// The parameters used to configure an image draw call
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct DrawParameters {
-    /// Widget size as determined by iced layout.
-    viewport: PhysicalSize<u32>,
-    /// Image starts at this offset from the top left corner of the viewport.
-    offset: na::Vector2<f32>,
-    /// Image is scaled by this factor.
-    zoom: f32,
+    /// State about the viewport
+    viewport: ScrollableViewportState,
+
     /// The image filter that should be applied
     ///
     /// Currently does not differentiate between magnification and minification.
@@ -757,15 +638,6 @@ struct DrawParameters {
 }
 
 impl DrawParameters {
-    /// Create the [`ImageMetadataRaw`] corresponding to the current parameters
-    fn raw_metadata(&self) -> ImageMetadataRaw {
-        ImageMetadataRaw {
-            start: [self.offset.x, self.offset.y],
-            zoom: self.zoom,
-            _pad: 0,
-        }
-    }
-
     /// Create the [`LanczosInfoRaw`] corresponding to the current parameters
     #[expect(clippy::unused_self)]
     const fn raw_lanczos(&self) -> LanczosInfoRaw {
@@ -778,23 +650,13 @@ impl DrawParameters {
         // looks the best from testing around.
         const FACTOR: f32 = 0.3;
 
-        if self.zoom >= 1. {
+        let zoom = self.viewport.zoom();
+        if zoom >= 1. {
             return None;
         }
 
-        let sigma = FACTOR / self.zoom;
+        let sigma = FACTOR / zoom;
         let kernel = GaussFilter::new(sigma)?;
         Some(kernel.blur_kernel())
-    }
-}
-
-impl Default for DrawParameters {
-    fn default() -> Self {
-        Self {
-            viewport: PhysicalSize::default(),
-            offset: na::Matrix::default(),
-            zoom: 1.,
-            filter: ImageFilter::default(),
-        }
     }
 }

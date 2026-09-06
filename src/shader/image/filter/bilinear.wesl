@@ -13,20 +13,17 @@ fn bilinear_weights(fract: vec2<f32>) -> mat2x2<f32> {
 }
 
 fn filter_bilinear(
+    image_pos: vec2<f32>,
     t_image: texture_2d<f32>,
-    image_info: ImageInfo,
-    in: vec4<f32>,
+    zoom: f32,
 ) -> vec4<f32> {
-    let viewport_pos = in.xy;
-    let image_pos = (viewport_pos - image_info.start) / image_info.zoom;
-
     let dims = textureDimensions(t_image);
     let dims_f = vec2<f32>(dims);
     let inside = 0. <= image_pos.x && image_pos.x <= dims_f.x
               && 0. <= image_pos.y && image_pos.y <= dims_f.y;
     if !inside { discard; }
 
-    let level_f = max(0., floor(log2(1. / image_info.zoom)));
+    let level_f = max(0., floor(log2(1. / zoom)));
     let level = u32(level_f);
 
     let pos_level_f = image_pos / exp2(level_f);

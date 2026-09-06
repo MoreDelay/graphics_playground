@@ -17,11 +17,11 @@ use iced_winit::winit::event::{ElementState, MouseButton};
 use iced_winit::winit::keyboard::ModifiersState;
 use nalgebra as na;
 
-use crate::controls::coords::{LocalCoords, LocalPoint};
+use crate::controls::coords::{LocalCoords, Physical};
 use crate::hello_triangle::HelloWidget;
-use crate::image::{ClampedSplit, ImageMemory, ImageMessage, ImageWidget, SplitReaction};
+use crate::image::{ClampedSplit, Image, ImageMessage, ImageWidget, SplitReaction};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
-use crate::instruments::viewport::Viewport;
+use crate::instruments::viewport::ViewportGui;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::physics::{PhysicsMessage, PhysicsWidget};
 
@@ -41,7 +41,7 @@ pub enum Message {
     /// Mouse scrolled down
     ScrollDown,
     /// The cursor moved to a new position
-    CursorMoved(na::Point2<f32>),
+    CursorMoved(Physical<na::Point2<f32>>),
     /// A mouse button was pressed
     MouseInput {
         /// The button pressed
@@ -68,7 +68,7 @@ pub struct Controls {
     /// coordinates, so store them as such.
     scene_bounds: Cell<Option<PhysicalInsets<u32>>>,
     /// The viewport of the wgpu area
-    viewport: Viewport,
+    viewport: ViewportGui,
     /// A general-purpose pass-thru pipeline
     passthru: PassThruPipeline,
     /// The current scene to display
@@ -93,7 +93,7 @@ impl Controls {
     /// Create a new controller
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let scene_bounds = Cell::new(None);
-        let viewport = Viewport::new();
+        let viewport = ViewportGui::new();
         let passthru = PassThruPipeline::new(ctx, target.config.format);
         let scene = CurrentScene::triangle(ctx, target);
 
@@ -215,11 +215,6 @@ impl Controls {
         target: &TargetContext,
         message: Message,
     ) -> ControlFlow<()> {
-        let cursor = self
-            .cursor
-            .pos()
-            .and_then(|cursor| self.viewport.coords().local_point(cursor));
-
         match (&mut self.scene, message) {
             (current, Message::SwitchScene(next)) if &next != current => match next {
                 Scene::HelloTriangle => self.scene = CurrentScene::triangle(ctx, target),
@@ -244,7 +239,7 @@ impl Controls {
 
             (CurrentScene::Image(widget), Message::SelectFile) => {
                 let image = Self::pick_image_dialog().and_then(|path| {
-                    ImageMemory::load(&path)
+                    Image::load(&path)
                         .inspect_err(|e| eprintln!("Could not load image: {e}"))
                         .ok()
                 });
@@ -254,10 +249,18 @@ impl Controls {
                 }
             }
             (CurrentScene::Image(widget), Message::ScrollUp) => {
+                let cursor = self
+                    .cursor
+                    .pos()
+                    .and_then(|cursor| self.viewport.coords().local_point(cursor));
                 let message = ImageMessage::ZoomIn { cursor };
                 widget.update(message);
             }
             (CurrentScene::Image(widget), Message::ScrollDown) => {
+                let cursor = self
+                    .cursor
+                    .pos()
+                    .and_then(|cursor| self.viewport.coords().local_point(cursor));
                 let message = ImageMessage::ZoomOut { cursor };
                 widget.update(message);
             }
@@ -286,7 +289,7 @@ impl Controls {
 
     /// Get the current cursor for Iced
     pub fn cursor(&self) -> iced::mouse::Cursor {
-        let Some(pos) = self.cursor.pos() else {
+        let Some(Physical(pos)) = self.cursor.pos() else {
             return iced::mouse::Cursor::Unavailable;
         };
         let pos = PhysicalPosition { x: pos.x, y: pos.y }.cast();
@@ -326,23 +329,24 @@ impl Controls {
                 label: Some("Frame Draw Command Encoder"),
             });
 
+        let context = &mut RenderContext {
+            ctx,
+            target,
+            passthru: &self.passthru,
+            encoder: &mut encoder,
+            viewport: &self.viewport,
+        };
+
         let output = match &mut self.scene {
-            CurrentScene::HelloTriangle(scene) => {
-                scene.render(ctx, &self.passthru, &mut encoder, &self.viewport)
-            }
-            CurrentScene::Image(image) => {
-                image.render(ctx, target, &self.passthru, &mut encoder, &self.viewport)
-            }
-            CurrentScene::Physics(scene) => {
-                scene.render(ctx, &self.passthru, &mut encoder, &self.viewport)
-            }
+            CurrentScene::HelloTriangle(scene) => scene.render(context),
+            CurrentScene::Image(scene) => scene.render(context),
+            CurrentScene::Physics(scene) => scene.render(context),
         };
 
         let Some(output) = output else {
             return;
         };
 
-        // self.render_to_viewport(view, &mut encoder, render_target, bounds);
         self.viewport
             .draw(&self.passthru, &mut encoder, output, view);
 
@@ -380,7 +384,7 @@ impl Controls {
     }
 
     /// Handle the moved cursor
-    fn cursor_moved(&mut self, position: na::Point2<f32>) {
+    fn cursor_moved(&mut self, position: Physical<na::Point2<f32>>) {
         let cursor = CursorState::LastPos(position);
         let last = std::mem::replace(&mut self.cursor, cursor);
 
@@ -392,7 +396,7 @@ impl Controls {
             return;
         }
 
-        let offset = position - last;
+        let offset = Physical(position.0 - last.0);
         let offset = self.viewport.coords().local_vector(offset);
 
         match &mut self.scene {
@@ -456,7 +460,7 @@ impl CurrentScene {
     }
 
     /// Constructor for [`Self::Image`]
-    fn image(viewport: &Viewport) -> Self {
+    fn image(viewport: &ViewportGui) -> Self {
         let mut widget = ImageWidget::new();
 
         let size = viewport.size();
@@ -651,24 +655,29 @@ impl PlaceholderWidget<'_> {
     fn split_rect(&self, layout: Layout<'_>) -> Option<Rectangle<f32>> {
         let bounds = self.compute_bounds(layout);
         let coords = LocalCoords::new(bounds, self.scale_factor);
+        let half = coords.size().width as f32 / 2.;
         let x = match self.split?.split {
-            ClampedSplit::FullLeft => 0.,
+            ClampedSplit::FullLeft => -half,
             ClampedSplit::Split(pos) => pos,
-            ClampedSplit::FullRight => coords.size().width as f32,
+            ClampedSplit::FullRight => half,
         };
 
         Some(Rectangle {
             x: x - Self::SPLIT_WIDTH / 2.,
-            y: 0.,
+            y: -(coords.size().height as f32 / 2.),
             width: Self::SPLIT_WIDTH,
             height: coords.size().height as f32,
         })
     }
 
     /// Get the position of the cursor within the current viewport area
-    fn local_cursor(&self, layout: Layout<'_>, cursor: iced::mouse::Cursor) -> Option<LocalPoint> {
+    fn local_cursor(
+        &self,
+        layout: Layout<'_>,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<na::Point2<f32>> {
         let iced::Point { x, y } = cursor.position()?;
-        let point = na::Point2::new(x, y);
+        let point = Physical(na::Point2::new(x, y));
 
         let bounds = self.compute_bounds(layout);
         let coords = LocalCoords::new(bounds, self.scale_factor);
@@ -683,15 +692,30 @@ pub enum CursorState {
     #[default]
     Unknown,
     /// Got the position of the cursor
-    LastPos(na::Point2<f32>),
+    LastPos(Physical<na::Point2<f32>>),
 }
 
 impl CursorState {
     /// Get the current position of the cursor
-    const fn pos(self) -> Option<na::Point2<f32>> {
+    const fn pos(self) -> Option<Physical<na::Point2<f32>>> {
         match self {
             Self::Unknown => None,
             Self::LastPos(pos) => Some(pos),
         }
     }
+}
+
+/// References to all data structures needed for widgets to render their scene
+#[non_exhaustive]
+pub struct RenderContext<'a> {
+    /// The device and queue
+    pub ctx: &'a GpuContext,
+    /// Context about the window and its surface
+    pub target: &'a TargetContext,
+    /// The passthru pipeline to render to the viewport
+    pub passthru: &'a PassThruPipeline,
+    /// The command encoder for the current frame
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The viewport to which the render output should contain itself
+    pub viewport: &'a ViewportGui,
 }

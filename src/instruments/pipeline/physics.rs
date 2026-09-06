@@ -3,8 +3,9 @@
 use iced::wgpu;
 
 use crate::instruments::GpuContext;
-use crate::instruments::bind::physics::{CameraInfoRaw, InstanceRaw, VertexRaw};
-use crate::instruments::buffer::{SimpleBufferBind, SimpleBufferBindLayout};
+use crate::instruments::bind::image::ViewportRaw;
+use crate::instruments::buffer::{SimpleBufferBind, SimpleBufferBindLayout, VisibleVertex};
+use crate::instruments::mesh::primitives::{InstanceRaw, VertexRaw};
 use crate::model::MeshInstancing;
 
 /// Physics object shaders (contains both vertex and fragment)
@@ -71,14 +72,13 @@ impl PhysicsObjectPipeline {
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        camera: &SimpleBufferBind<CameraInfoRaw>,
+        camera: &SimpleBufferBind<ViewportRaw, VisibleVertex>,
         meshes: &MeshInstancing,
     ) {
         pass.set_pipeline(&self.0);
         pass.set_bind_group(0, &**camera, &[]);
 
         for instancing in meshes.slice() {
-            println!("drawing");
             let mesh = instancing.base();
             let instances = instancing.instances();
             pass.set_vertex_buffer(0, mesh.vertices().slice(..));
@@ -94,7 +94,7 @@ pub struct PhysicsObjectPipelineLayout(wgpu::PipelineLayout);
 
 impl PhysicsObjectPipelineLayout {
     /// Create a new layout
-    pub fn new(ctx: &GpuContext, buffer_layout: &SimpleBufferBindLayout) -> Self {
+    pub fn new(ctx: &GpuContext, buffer_layout: &SimpleBufferBindLayout<VisibleVertex>) -> Self {
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

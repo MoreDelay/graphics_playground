@@ -3,8 +3,8 @@
 use iced_wgpu::wgpu;
 use iced_winit::core::Color;
 
-use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
-use crate::instruments::viewport::Viewport;
+use crate::controls::RenderContext;
+use crate::instruments::pipeline::passthru::PassThruTexture;
 use crate::instruments::{GpuContext, TargetContext};
 
 /// A widget to display the Hello World triangle
@@ -37,13 +37,15 @@ impl HelloWidget {
     }
 
     /// Get the latest rendering output
-    pub fn render(
-        &mut self,
-        ctx: &GpuContext,
-        passthru: &PassThruPipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        viewport: &Viewport,
-    ) -> Option<&PassThruTexture> {
+    pub fn render(&mut self, context: &mut RenderContext) -> Option<&PassThruTexture> {
+        let RenderContext {
+            ctx,
+            passthru,
+            encoder,
+            viewport,
+            ..
+        } = context;
+
         let last_output = self.render_output.take();
         let expected_size = viewport.extent()?;
 

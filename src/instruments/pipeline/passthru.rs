@@ -16,7 +16,7 @@ pub struct PassThruPipeline {
 
 impl PassThruPipeline {
     /// Pass-thru vertex shader path
-    const SHADER_VERTEX_QUAD: &str = "package::image::quad";
+    const SHADER_VERTEX_QUAD: &str = "package::image::unit_quad";
     /// Pass-thru fragment shader path
     const SHADER_FRAGMENT_PASSTHRU: &str = "package::passthru";
 
@@ -52,7 +52,7 @@ impl PassThruPipeline {
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &vs_module,
-                    entry_point: Some("vs_quad"),
+                    entry_point: Some("vs_unit_quad"),
                     buffers: &[],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
@@ -110,7 +110,7 @@ impl PassThruPipeline {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // iced drew the gui already, so load that
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],

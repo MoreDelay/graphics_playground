@@ -219,7 +219,7 @@ impl Controls {
             (current, Message::SwitchScene(next)) if &next != current => match next {
                 Scene::HelloTriangle => self.scene = CurrentScene::triangle(ctx, target),
                 Scene::Image => {
-                    self.scene = CurrentScene::image(&self.viewport);
+                    self.scene = CurrentScene::image();
                 }
                 Scene::Physics => {
                     self.scene = CurrentScene::physics(ctx, target);
@@ -310,18 +310,7 @@ impl Controls {
             return;
         };
 
-        let new_size = self.viewport.update_bounds(bounds);
-        if new_size {
-            let size = self.viewport.size();
-            match &mut self.scene {
-                CurrentScene::HelloTriangle(_) => (),
-                CurrentScene::Image(image) => {
-                    let msg = ImageMessage::ResizedViewport(size);
-                    image.update(msg);
-                }
-                CurrentScene::Physics(_) => (),
-            }
-        }
+        self.viewport.update_bounds(bounds);
 
         let mut encoder = ctx
             .device
@@ -460,13 +449,8 @@ impl CurrentScene {
     }
 
     /// Constructor for [`Self::Image`]
-    fn image(viewport: &ViewportGui) -> Self {
-        let mut widget = ImageWidget::new();
-
-        let size = viewport.size();
-        let msg = ImageMessage::ResizedViewport(size);
-        widget.update(msg);
-
+    fn image() -> Self {
+        let widget = ImageWidget::new();
         Self::Image(widget)
     }
 

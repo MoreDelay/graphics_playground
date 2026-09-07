@@ -78,6 +78,8 @@ impl ImageWidget {
 
     /// Get the latest rendering result
     pub fn render(&mut self, context: &mut RenderContext) -> Option<&PassThruTexture> {
+        self.resize_viewport(context.viewport.size());
+
         if self.meta.final_output().is_some() {
             return self.meta.final_output();
         }
@@ -132,7 +134,6 @@ impl ImageWidget {
     pub fn update(&mut self, message: ImageMessage) {
         match message {
             ImageMessage::SetImage(image) => self.set_image(image),
-            ImageMessage::ResizedViewport(size) => self.resize_viewport(size),
             ImageMessage::Pan(offset) => self.pan(offset),
             ImageMessage::SetZoom { zoom, cursor } => {
                 let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
@@ -217,6 +218,11 @@ impl ImageWidget {
 
     /// Update the viewport size
     fn resize_viewport(&mut self, size: PhysicalSize<u32>) {
+        let changed = self.params.viewport.resize_view(size);
+        if !changed {
+            return;
+        }
+
         self.meta.resized();
         if let Some(left) = &mut self.left {
             left.instruments.resized();
@@ -224,8 +230,6 @@ impl ImageWidget {
         if let Some(right) = &mut self.right {
             right.instruments.resized();
         }
-
-        self.params.viewport.resize_view(size);
 
         if let Split::Set(split) = self.split {
             self.split = Split::Set(split.clamped(size.width as f32));
@@ -428,8 +432,6 @@ impl SingleImageState {
 pub enum ImageMessage {
     /// Display a new image
     SetImage(Image),
-    /// The viewport has a new size
-    ResizedViewport(PhysicalSize<u32>),
     /// Move the image within the viewport
     Pan(na::Vector2<f32>),
     /// Set a new zoom level
@@ -480,10 +482,6 @@ impl std::fmt::Debug for ImageMessage {
                     "image",
                     &format!("Image({}x{})", image.width(), image.height()),
                 )
-                .finish(),
-            Self::ResizedViewport(size) => f
-                .debug_struct("ResizedViewport")
-                .field("size", size)
                 .finish(),
             Self::Pan(offset) => f.debug_struct("Pan").field("offset", offset).finish(),
             Self::SetZoom { cursor, zoom } => f

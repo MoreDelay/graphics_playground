@@ -69,6 +69,8 @@ impl PhysicsWidget {
 
     /// Render the current state of objects
     pub fn render(&mut self, context: &mut RenderContext) -> Option<&PassThruTexture> {
+        self.resize_viewport(context.viewport.size());
+
         if self.instruments.final_output().is_some() {
             return self.instruments.final_output();
         }
@@ -81,10 +83,6 @@ impl PhysicsWidget {
             ..
         } = context;
 
-        let size_updated = self.viewport.resize_view(viewport.size());
-        if size_updated {
-            self.instruments.camera.degrade();
-        }
         self.instruments.create_camera(ctx, &self.viewport);
 
         let output = self.instruments.create_output(ctx, passthru, viewport)?;
@@ -122,6 +120,16 @@ impl PhysicsWidget {
             }
             PhysicsMessage::Tick => self.tick(),
         }
+    }
+
+    /// Update the viewport size
+    fn resize_viewport(&mut self, size: PhysicalSize<u32>) {
+        let changed = self.viewport.resize_view(size);
+        if !changed {
+            return;
+        }
+
+        self.instruments.resized();
     }
 
     /// Progress the simulation by one tick
@@ -319,8 +327,14 @@ impl PhysicsInstruments {
         }
     }
 
+    /// Signal that the viewport size has changed
+    fn resized(&mut self) {
+        self.final_output.degrade();
+        self.camera.degrade();
+    }
+
     /// Get the current final output
-    pub const fn final_output(&self) -> Option<&PassThruTexture> {
+    const fn final_output(&self) -> Option<&PassThruTexture> {
         let Use::Active(output) = &self.final_output else {
             return None;
         };
@@ -328,13 +342,13 @@ impl PhysicsInstruments {
     }
 
     /// Get the current final output
-    pub fn set_final_output(&mut self, output: PassThruTexture) -> &PassThruTexture {
+    fn set_final_output(&mut self, output: PassThruTexture) -> &PassThruTexture {
         self.final_output = Use::Active(output);
         self.final_output.active()
     }
 
     /// Extract or create the render target for the widget
-    pub fn create_output(
+    fn create_output(
         &mut self,
         ctx: &GpuContext,
         passthru: &PassThruPipeline,
@@ -362,7 +376,7 @@ impl PhysicsInstruments {
     }
 
     /// Create or update the camera transform
-    pub fn create_camera(&mut self, ctx: &GpuContext, viewport: &ScrollableViewportState) {
+    fn create_camera(&mut self, ctx: &GpuContext, viewport: &ScrollableViewportState) {
         let camera = match self.camera.take() {
             Use::Missing | Use::Invalid => {
                 let layout = SimpleBufferBindLayout::new(ctx, Some("Physics Buffer Layout"));

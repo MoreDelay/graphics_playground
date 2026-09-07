@@ -19,7 +19,7 @@ use crate::instruments::mipmap::MipMapper;
 use crate::instruments::pipeline::ImageFilter;
 use crate::instruments::pipeline::passthru::PassThruTexture;
 use crate::instruments::splitview::draw_splitted;
-use crate::instruments::viewport::ScrollableViewportState;
+use crate::viewport::{ScrollableViewportState, ViewportMessage};
 
 /// The image viewer widget
 pub struct ImageWidget {
@@ -40,9 +40,6 @@ pub struct ImageWidget {
 }
 
 impl ImageWidget {
-    /// The (exponential) factor by which the zoom changes per scroll tick
-    const SCALE_INCREASE_FACTOR: f32 = 1.2;
-
     /// Create a new image viewer widget
     pub fn new() -> Self {
         let area = na::Vector2::new(1., 1.);
@@ -134,19 +131,7 @@ impl ImageWidget {
     pub fn update(&mut self, message: ImageMessage) {
         match message {
             ImageMessage::SetImage(image) => self.set_image(image),
-            ImageMessage::Pan(offset) => self.pan(offset),
-            ImageMessage::SetZoom { zoom, cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
-                self.set_zoom(zoom, fixed_point);
-            }
-            ImageMessage::ZoomIn { cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
-                self.zoom_in(fixed_point);
-            }
-            ImageMessage::ZoomOut { cursor } => {
-                let fixed_point = cursor.unwrap_or_else(|| self.viewport_mid());
-                self.zoom_out(fixed_point);
-            }
+            ImageMessage::Viewport(message) => self.update_viewport(message),
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
             ImageMessage::DragSplit { active } => self.drag_split(active),
@@ -236,26 +221,30 @@ impl ImageWidget {
         }
     }
 
-    /// Handle zoom in
-    fn zoom_in(&mut self, fix_point: na::Point2<f32>) {
-        let zoom = self.params.viewport.zoom() * Self::SCALE_INCREASE_FACTOR;
-        self.set_zoom(zoom, fix_point);
+    /// Handle a message intended for the viewport
+    fn update_viewport(&mut self, message: ViewportMessage) {
+        match message {
+            ViewportMessage::Pan(pan) => self.pan(pan),
+            ViewportMessage::SetZoom { zoom, fix_point } => self.set_zoom(zoom, fix_point),
+            ViewportMessage::ScaleZoom { factor, fix_point } => self.scale_zoom(factor, fix_point),
+        }
     }
 
-    /// Handle zoom out
-    fn zoom_out(&mut self, fix_point: na::Point2<f32>) {
-        let zoom = self.params.viewport.zoom() / Self::SCALE_INCREASE_FACTOR;
-        self.set_zoom(zoom, fix_point);
+    /// Handle zoom in
+    fn scale_zoom(&mut self, factor: f32, fix_point: na::Point2<f32>) {
+        self.meta.zoomed();
+        for image in self.iter_images_mut() {
+            image.instruments.zoomed();
+        }
+
+        self.params.viewport.scale_zoom(factor, fix_point);
     }
 
     /// Handle zoom change
     fn set_zoom(&mut self, zoom: f32, fix_point: na::Point2<f32>) {
         self.meta.zoomed();
-        if let Some(left) = &mut self.left {
-            left.instruments.zoomed();
-        }
-        if let Some(right) = &mut self.right {
-            right.instruments.zoomed();
+        for image in self.iter_images_mut() {
+            image.instruments.zoomed();
         }
 
         self.params.viewport.set_zoom(zoom, fix_point);
@@ -267,14 +256,11 @@ impl ImageWidget {
 
         match self.split {
             Split::Set(_) => {
-                if let Some(left) = &mut self.left {
-                    left.instruments.panned();
-                }
-                if let Some(right) = &mut self.right {
-                    right.instruments.panned();
+                for image in self.iter_images_mut() {
+                    image.instruments.panned();
                 }
 
-                self.params.viewport.scroll(pan_vector);
+                self.params.viewport.pan(pan_vector);
             }
             Split::Dragging(pos) => {
                 // only final image is out-of-date
@@ -329,10 +315,11 @@ impl ImageWidget {
         self.panning = active;
     }
 
-    /// Get the location of the viewport middle
-    fn viewport_mid(&self) -> na::Point2<f32> {
-        let PhysicalSize { width, height } = self.params.viewport.size().cast::<f32>();
-        na::Point2::new(width / 2., height / 2.)
+    /// Iterate over the state of all loaded images
+    fn iter_images_mut(&mut self) -> impl IntoIterator<Item = &mut SingleImageState> {
+        [self.left.as_mut(), self.right.as_mut()]
+            .into_iter()
+            .flatten()
     }
 }
 
@@ -432,31 +419,8 @@ impl SingleImageState {
 pub enum ImageMessage {
     /// Display a new image
     SetImage(Image),
-    /// Move the image within the viewport
-    Pan(na::Vector2<f32>),
-    /// Set a new zoom level
-    SetZoom {
-        /// The cursor location if available
-        ///
-        /// This point will stay fixed
-        cursor: Option<na::Point2<f32>>,
-        /// The target zoom level
-        zoom: f32,
-    },
-    /// Zoom in (magnify)
-    ZoomIn {
-        /// The cursor location if available
-        ///
-        /// This point will stay fixed
-        cursor: Option<na::Point2<f32>>,
-    },
-    /// Zoom out (minify)
-    ZoomOut {
-        /// The cursor location if available
-        ///
-        /// This point will stay fixed
-        cursor: Option<na::Point2<f32>>,
-    },
+    /// Message for moving the contents of the viewport
+    Viewport(ViewportMessage),
     /// Reset the image position in the viewport
     ResetPosition,
     /// Cycle through the filters used for rendering
@@ -483,14 +447,7 @@ impl std::fmt::Debug for ImageMessage {
                     &format!("Image({}x{})", image.width(), image.height()),
                 )
                 .finish(),
-            Self::Pan(offset) => f.debug_struct("Pan").field("offset", offset).finish(),
-            Self::SetZoom { cursor, zoom } => f
-                .debug_struct("SetZoom")
-                .field("cursor", cursor)
-                .field("zoom", zoom)
-                .finish(),
-            Self::ZoomIn { cursor } => f.debug_struct("ZoomIn").field("cursor", cursor).finish(),
-            Self::ZoomOut { cursor } => f.debug_struct("ZoomOut").field("cursor", cursor).finish(),
+            Self::Viewport(viewport) => f.debug_tuple("Viewport").field(viewport).finish(),
             Self::ResetPosition => write!(f, "ResetPosition"),
             Self::CycleFilters => write!(f, "CycleFilters"),
             Self::DragSplit { active } => {
@@ -504,14 +461,24 @@ impl std::fmt::Debug for ImageMessage {
 impl ImageMessage {
     /// Create an image message given a specific key was pressed
     pub fn from_key(key: &SmolStr, cursor: Option<na::Point2<f32>>) -> Option<Self> {
+        let fix_point = cursor.unwrap_or_default();
         match key.as_str() {
-            "1" => Some(Self::SetZoom { cursor, zoom: 1. }),
-            "2" => Some(Self::SetZoom { cursor, zoom: 2. }),
-            "9" => Some(Self::SetZoom { cursor, zoom: 0.5 }),
+            "1" => Some(Self::Viewport(ViewportMessage::SetZoom {
+                fix_point,
+                zoom: 1.,
+            })),
+            "2" => Some(Self::Viewport(ViewportMessage::SetZoom {
+                fix_point,
+                zoom: 2.,
+            })),
+            "9" => Some(Self::Viewport(ViewportMessage::SetZoom {
+                fix_point,
+                zoom: 0.5,
+            })),
             "s" => Some(Self::ResetPosition),
             "f" => Some(Self::CycleFilters),
-            "-" => Some(Self::ZoomOut { cursor }),
-            "+" => Some(Self::ZoomIn { cursor }),
+            "-" => Some(Self::Viewport(ViewportMessage::zoom_out(fix_point))),
+            "+" => Some(Self::Viewport(ViewportMessage::zoom_in(fix_point))),
             _ => None,
         }
     }

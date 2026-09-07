@@ -38,8 +38,8 @@ use crate::instruments::pipeline::image::{
     SimpleImageRenderPipelineLayout,
 };
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
-use crate::instruments::viewport::ViewportGui;
 use crate::instruments::{GpuContext, TargetContext, Use};
+use crate::viewport::ViewportGui;
 
 /// The rendering instruments independent of any concrete image
 #[derive(Default)]

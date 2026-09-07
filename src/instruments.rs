@@ -16,7 +16,6 @@ pub mod mesh;
 pub mod mipmap;
 pub mod pipeline;
 pub mod splitview;
-pub mod viewport;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -64,6 +63,18 @@ pub enum Use<T> {
     ///
     /// This allows it to get recycled when it needs to be used again
     Unused(T),
+}
+
+impl<T> std::fmt::Debug for Use<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(f, "Missing"),
+            Self::Invalid => write!(f, "Invalid"),
+            Self::Active(_) => write!(f, "Active"),
+            Self::Recycle(_) => write!(f, "Recycle"),
+            Self::Unused(_) => write!(f, "Unused"),
+        }
+    }
 }
 
 impl<T> Use<T> {

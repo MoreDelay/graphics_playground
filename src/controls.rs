@@ -21,9 +21,9 @@ use crate::controls::coords::{LocalCoords, Physical};
 use crate::hello_triangle::HelloWidget;
 use crate::image::{ClampedSplit, Image, ImageMessage, ImageWidget, SplitReaction};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
-use crate::instruments::viewport::ViewportGui;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::physics::{PhysicsMessage, PhysicsWidget};
+use crate::viewport::{ViewportGui, ViewportMessage};
 
 pub mod coords;
 
@@ -189,10 +189,12 @@ impl Controls {
                 .push(
                     button(text("Reset Zoom").center().width(Fill))
                         .width(Fill)
-                        .on_press(Message::Image(ImageMessage::SetZoom {
-                            cursor: None,
-                            zoom: 1.,
-                        })),
+                        .on_press(Message::Image(ImageMessage::Viewport(
+                            ViewportMessage::SetZoom {
+                                fix_point: na::Point2::origin(),
+                                zoom: 1.,
+                            },
+                        ))),
                 ),
             CurrentScene::Physics(_) => control.push(
                 button(text("Reset").center().width(Fill))
@@ -230,12 +232,12 @@ impl Controls {
             (_, Message::SetScaleFactor(factor)) => self.viewport.update_scale_factor(factor),
             (_, Message::ModifiersChanged(mods)) => self.modifiers = mods,
             (_, Message::CursorMoved(position)) => self.cursor_moved(position),
+            (_, Message::ScrollUp) => self.scroll_up(),
+            (_, Message::ScrollDown) => self.scroll_down(),
             (_, Message::MouseInput { button, state }) => self.mouse_input(button, state),
             (_, Message::KeyPress(key)) => return self.key_pressed(&key),
 
             (CurrentScene::HelloTriangle(_), Message::SelectFile) => (),
-            (CurrentScene::HelloTriangle(_), Message::ScrollUp) => (),
-            (CurrentScene::HelloTriangle(_), Message::ScrollDown) => (),
 
             (CurrentScene::Image(widget), Message::SelectFile) => {
                 let image = Self::pick_image_dialog().and_then(|path| {
@@ -247,22 +249,6 @@ impl Controls {
                     let msg = ImageMessage::SetImage(image);
                     widget.update(msg);
                 }
-            }
-            (CurrentScene::Image(widget), Message::ScrollUp) => {
-                let cursor = self
-                    .cursor
-                    .pos()
-                    .and_then(|cursor| self.viewport.coords().local_point(cursor));
-                let message = ImageMessage::ZoomIn { cursor };
-                widget.update(message);
-            }
-            (CurrentScene::Image(widget), Message::ScrollDown) => {
-                let cursor = self
-                    .cursor
-                    .pos()
-                    .and_then(|cursor| self.viewport.coords().local_point(cursor));
-                let message = ImageMessage::ZoomOut { cursor };
-                widget.update(message);
             }
             (CurrentScene::Image(widget), Message::Image(msg)) => widget.update(msg),
             (_, Message::Image(..)) => (),
@@ -367,7 +353,12 @@ impl Controls {
                     widget.update(message);
                 }
             }
-            CurrentScene::Physics(_) => (),
+            CurrentScene::Physics(widget) => {
+                // TODO: Just some hacky way to update the scene for now, should be ticked from main
+                // event loop
+                let message = PhysicsMessage::Tick;
+                widget.update(message);
+            }
         }
         ControlFlow::Continue(())
     }
@@ -381,23 +372,67 @@ impl Controls {
             return;
         };
 
-        if self.mouse_button == ElementState::Released {
-            return;
-        }
-
         let offset = Physical(position.0 - last.0);
         let offset = self.viewport.coords().local_vector(offset);
 
         match &mut self.scene {
             CurrentScene::HelloTriangle(_) => (),
+
+            CurrentScene::Image(widget) if self.mouse_button == ElementState::Pressed => {
+                let message = ViewportMessage::Pan(offset);
+                let message = ImageMessage::Viewport(message);
+                widget.update(message);
+            }
+            CurrentScene::Image(_) => (),
+
+            CurrentScene::Physics(widget) if self.mouse_button == ElementState::Pressed => {
+                let message = ViewportMessage::Pan(offset);
+                let message = PhysicsMessage::Viewport(message);
+                widget.update(message);
+            }
+            CurrentScene::Physics(_) => (),
+        }
+    }
+
+    /// Handle mouse scrolling up
+    fn scroll_up(&mut self) {
+        let cursor = self
+            .cursor
+            .pos()
+            .and_then(|cursor| self.viewport.coords().local_point(cursor))
+            .unwrap_or_default();
+        let message = ViewportMessage::zoom_in(cursor);
+
+        match &mut self.scene {
+            CurrentScene::HelloTriangle(_) => (),
             CurrentScene::Image(widget) => {
-                let message = ImageMessage::Pan(offset);
+                let message = ImageMessage::Viewport(message);
                 widget.update(message);
             }
             CurrentScene::Physics(widget) => {
-                // TODO: Just some hacky way to update the scene for now, should be ticked from main
-                // event loop
-                let message = PhysicsMessage::Tick;
+                let message = PhysicsMessage::Viewport(message);
+                widget.update(message);
+            }
+        }
+    }
+
+    /// Handle mouse scrolling up
+    fn scroll_down(&mut self) {
+        let cursor = self
+            .cursor
+            .pos()
+            .and_then(|cursor| self.viewport.coords().local_point(cursor))
+            .unwrap_or_default();
+        let message = ViewportMessage::zoom_out(cursor);
+
+        match &mut self.scene {
+            CurrentScene::HelloTriangle(_) => (),
+            CurrentScene::Image(widget) => {
+                let message = ImageMessage::Viewport(message);
+                widget.update(message);
+            }
+            CurrentScene::Physics(widget) => {
+                let message = PhysicsMessage::Viewport(message);
                 widget.update(message);
             }
         }

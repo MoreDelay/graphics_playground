@@ -22,9 +22,9 @@ use crate::instruments::mesh::primitives::{
 };
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::pipeline::physics::{PhysicsObjectPipeline, PhysicsObjectPipelineLayout};
-use crate::instruments::viewport::{ScrollableViewportState, ViewportGui};
 use crate::instruments::{GpuContext, TargetContext, Use};
 use crate::model::{MeshCpu, MeshInstancing, SingleMeshInstancing};
+use crate::viewport::{ScrollableViewportState, ViewportGui, ViewportMessage};
 
 /// The 2d physics simulation widget
 pub struct PhysicsWidget {
@@ -41,7 +41,7 @@ impl PhysicsWidget {
     pub fn new(ctx: &GpuContext, target: &TargetContext) -> Self {
         let size = na::Vector2::new(2., 2.);
         let view = PhysicalSize::new(1, 1);
-        let viewport = ScrollableViewportState::new(size, view, 100.);
+        let viewport = ScrollableViewportState::new(size, view, 80.);
 
         let state = SimulationState::init(size);
         let rect_instances: Vec<_> = state
@@ -113,12 +113,18 @@ impl PhysicsWidget {
 
     /// Handle a message for the physics widget
     pub fn update(&mut self, message: PhysicsMessage) {
+        self.instruments.final_output.degrade();
         match message {
             PhysicsMessage::Reset => {
-                self.instruments.final_output.degrade();
+                self.instruments.camera.degrade();
+                self.viewport.reset();
                 self.state = SimulationState::init(self.viewport.area());
             }
             PhysicsMessage::Tick => self.tick(),
+            PhysicsMessage::Viewport(message) => {
+                self.instruments.camera.degrade();
+                self.viewport.update(message);
+            }
         }
     }
 
@@ -146,6 +152,8 @@ pub enum PhysicsMessage {
     Reset,
     /// Progress the simulation by one tick
     Tick,
+    /// Update the visible area of the viewport
+    Viewport(ViewportMessage),
 }
 
 /// The state of the physics simulation

@@ -127,13 +127,17 @@ impl ViewportGui {
 pub struct ScrollableViewportState {
     /// Default zoom level uses this many pixels to display a length of one
     pixel_per_unit: f32,
-    /// Total size that can be scrolled to (disregarding effects of zoom)
+    /// Total size that can be scrolled to
+    ///
+    /// This stores the number of units per direction when zoom is 1.
     area: na::Vector2<f32>,
-    /// The physical size that is displayed in the view
+    /// The physical size that is displayed in the view, in pixels
     view: PhysicalSize<u32>,
-    /// The viewport has moved away from the image center by this amount
+    /// The viewport has moved away from the area center by this amount of pixels
+    ///
+    /// This offset is independent of zoom, indicating this distance in units of physical pixels.
     offset: na::Point2<f32>,
-    /// Image is scaled by this factor
+    /// Area is scaled by this factor
     zoom: f32,
 }
 
@@ -151,6 +155,18 @@ impl ScrollableViewportState {
             view,
             offset: na::Point2::new(0., 0.),
             zoom: 1.,
+        }
+    }
+
+    /// Update the viewport based on the message
+    pub fn update(&mut self, message: ViewportMessage) {
+        match message {
+            ViewportMessage::Pan(pan_vector) => self.pan(pan_vector),
+            ViewportMessage::SetZoom { zoom, fix_point } => self.set_zoom(zoom, fix_point),
+            ViewportMessage::ScaleZoom { factor, fix_point } => {
+                let zoom = self.zoom * factor;
+                self.set_zoom(zoom, fix_point);
+            }
         }
     }
 
@@ -185,7 +201,7 @@ impl ScrollableViewportState {
     }
 
     /// Scroll the contents of this viewport in the given direction
-    pub fn scroll(&mut self, pan_vector: na::Vector2<f32>) {
+    pub fn pan(&mut self, pan_vector: na::Vector2<f32>) {
         self.offset -= pan_vector / self.zoom;
         self.clamp_offset();
     }
@@ -220,6 +236,12 @@ impl ScrollableViewportState {
         self.clamp_offset();
     }
 
+    /// Scale the current zoom level by some factor
+    pub fn scale_zoom(&mut self, factor: f32, fix_point: na::Point2<f32>) {
+        let zoom = self.zoom * factor;
+        self.set_zoom(zoom, fix_point);
+    }
+
     /// Make sure that at least 10% of the viewport area shows part of the image.
     fn clamp_offset(&mut self) {
         const FILLED_MINIMUM: f32 = 0.1;
@@ -244,7 +266,8 @@ impl ScrollableViewportState {
         let factor = 2. * self.pixel_per_unit * self.zoom;
         let sx = factor / width;
         let sy = factor / height;
-        let offset = na::Point2::new(-self.offset.x * sx, -self.offset.y * sy);
+        let offset = self.offset / self.pixel_per_unit;
+        let offset = na::Point2::new(-offset.x * sx, -offset.y * sy);
         let view0 = na::Vector3::new(sx, 0., 0.);
         let view1 = na::Vector3::new(0., sy, 0.);
         let view2 = offset.to_homogeneous();
@@ -256,6 +279,48 @@ impl ScrollableViewportState {
             _pad0: 0,
             _pad1: 0,
             _pad2: 0,
+        }
+    }
+}
+
+/// Message to update the visible area within the viewport
+#[derive(Debug, Clone, Copy)]
+pub enum ViewportMessage {
+    /// Move the viewport contents following the given vector
+    Pan(na::Vector2<f32>),
+    /// Set the zoom level of the content
+    SetZoom {
+        /// The intended zoom level
+        zoom: f32,
+        /// The point within the viewport that stays in-place during zoom
+        fix_point: na::Point2<f32>,
+    },
+    /// Change the zoom factor by scaling the current value
+    ScaleZoom {
+        /// The factor by which the zoom should be scaled
+        factor: f32,
+        /// The point within the viewport that stays in-place during zoom
+        fix_point: na::Point2<f32>,
+    },
+}
+
+impl ViewportMessage {
+    /// The default scaling factor for a simple zoom-in or zoom-out message
+    const SCALE_FACTOR: f32 = 1.2;
+
+    /// Create a message to zoom in a little
+    pub const fn zoom_in(fix_point: na::Point2<f32>) -> Self {
+        Self::ScaleZoom {
+            factor: Self::SCALE_FACTOR,
+            fix_point,
+        }
+    }
+
+    /// Create a message to zoom out a little
+    pub const fn zoom_out(fix_point: na::Point2<f32>) -> Self {
+        Self::ScaleZoom {
+            factor: 1. / Self::SCALE_FACTOR,
+            fix_point,
         }
     }
 }

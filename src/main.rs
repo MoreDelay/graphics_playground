@@ -7,6 +7,7 @@ mod image;
 mod instruments;
 mod model;
 mod physics;
+mod viewport;
 
 pub fn main() -> Result<(), EventLoopError> {
     tracing_subscriber::fmt::init();

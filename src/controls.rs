@@ -1,8 +1,8 @@
 //! Contains the app controller
 
 use std::cell::Cell;
-use std::ops::ControlFlow;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use derive_more::Display;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
@@ -53,10 +53,34 @@ pub enum Message {
     ModifiersChanged(ModifiersState),
     /// A keyboard button was pressed
     KeyPress(SmolStr),
+    /// Poll as requested
+    Poll,
     /// A message intended for the image widget
     Image(ImageMessage),
     /// A message intended for the physics widget
     Physics(PhysicsMessage),
+}
+
+/// Response by the controller to the app executor
+#[derive(Debug, Default)]
+#[must_use]
+pub enum Response {
+    /// Nothing changed, keep as is
+    #[default]
+    NoChange,
+    /// Request to close the app
+    Exit,
+    /// Change how the often we need to update
+    Updates(Updates),
+}
+
+/// Describes when we need updates to happen
+#[derive(Debug)]
+pub enum Updates {
+    /// Only update when some event was triggered
+    OnEvent,
+    /// Request an update to the provided instant at the latest
+    NextTime(Instant),
 }
 
 /// Struct controlling what is displayed by the app
@@ -216,15 +240,21 @@ impl Controls {
         ctx: &GpuContext,
         target: &TargetContext,
         message: Message,
-    ) -> ControlFlow<()> {
+    ) -> Response {
         match (&mut self.scene, message) {
             (current, Message::SwitchScene(next)) if &next != current => match next {
-                Scene::HelloTriangle => self.scene = CurrentScene::triangle(ctx, target),
+                Scene::HelloTriangle => {
+                    self.scene = CurrentScene::triangle(ctx, target);
+                    return Response::Updates(Updates::OnEvent);
+                }
                 Scene::Image => {
                     self.scene = CurrentScene::image();
+                    return Response::Updates(Updates::OnEvent);
                 }
                 Scene::Physics => {
-                    self.scene = CurrentScene::physics(ctx, target);
+                    let (scene, next) = CurrentScene::physics(ctx, target);
+                    self.scene = scene;
+                    return Response::Updates(Updates::NextTime(next));
                 }
             },
             (_, Message::SwitchScene(_)) => (),
@@ -236,6 +266,7 @@ impl Controls {
             (_, Message::ScrollDown) => self.scroll_down(),
             (_, Message::MouseInput { button, state }) => self.mouse_input(button, state),
             (_, Message::KeyPress(key)) => return self.key_pressed(&key),
+            (_, Message::Poll) => return self.got_polled(),
 
             (CurrentScene::HelloTriangle(_), Message::SelectFile) => (),
 
@@ -252,12 +283,11 @@ impl Controls {
             }
             (CurrentScene::Image(widget), Message::Image(msg)) => widget.update(msg),
             (_, Message::Image(..)) => (),
-
             (CurrentScene::Physics(widget), Message::Physics(msg)) => widget.update(msg),
             (CurrentScene::Physics(_), _) => (),
             (_, Message::Physics(_)) => (),
         }
-        ControlFlow::Continue(())
+        Response::NoChange
     }
 
     /// Get the window minimal size constraints
@@ -337,10 +367,10 @@ impl Controls {
     }
 
     /// Handle a keyboard button press
-    fn key_pressed(&mut self, key: &SmolStr) -> ControlFlow<()> {
+    fn key_pressed(&mut self, key: &SmolStr) -> Response {
         // Quit with CTRL+Q
         if key.as_str() == "q" && self.modifiers.control_key() {
-            return ControlFlow::Break(());
+            return Response::Exit;
         }
 
         match &mut self.scene {
@@ -353,14 +383,9 @@ impl Controls {
                     widget.update(message);
                 }
             }
-            CurrentScene::Physics(widget) => {
-                // TODO: Just some hacky way to update the scene for now, should be ticked from main
-                // event loop
-                let message = PhysicsMessage::Tick;
-                widget.update(message);
-            }
+            CurrentScene::Physics(_) => (),
         }
-        ControlFlow::Continue(())
+        Response::NoChange
     }
 
     /// Handle the moved cursor
@@ -463,6 +488,19 @@ impl Controls {
             CurrentScene::Physics(_) => (),
         }
     }
+
+    /// React to the poll signal from the application
+    fn got_polled(&mut self) -> Response {
+        let updates = match &mut self.scene {
+            CurrentScene::HelloTriangle(_) => Updates::OnEvent,
+            CurrentScene::Image(_) => Updates::OnEvent,
+            CurrentScene::Physics(widget) => {
+                let next = widget.tick();
+                Updates::NextTime(next)
+            }
+        };
+        Response::Updates(updates)
+    }
 }
 
 /// Determines which scene is currently displayed by the GUI
@@ -490,9 +528,10 @@ impl CurrentScene {
     }
 
     /// Constructor for [`Self::Physics`]
-    fn physics(ctx: &GpuContext, target: &TargetContext) -> Self {
-        let physics = PhysicsWidget::new(ctx, target);
-        Self::Physics(physics)
+    fn physics(ctx: &GpuContext, target: &TargetContext) -> (Self, Instant) {
+        let mut physics = PhysicsWidget::new(ctx, target);
+        let next = physics.tick();
+        (Self::Physics(physics), next)
     }
 }
 

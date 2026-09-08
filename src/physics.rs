@@ -1,5 +1,7 @@
 //! Contains the 2d physics simulation widget
 
+use std::time::{Duration, Instant};
+
 use iced::wgpu;
 use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
@@ -34,6 +36,8 @@ pub struct PhysicsWidget {
     state: SimulationState,
     /// The state of the viewport that is currently shown
     viewport: ScrollableViewportState,
+    /// Last time the simulation did progress
+    last_tick: Option<Instant>,
 }
 
 impl PhysicsWidget {
@@ -64,6 +68,7 @@ impl PhysicsWidget {
             instruments,
             state,
             viewport,
+            last_tick: None,
         }
     }
 
@@ -121,7 +126,6 @@ impl PhysicsWidget {
                 self.viewport.reset();
                 self.state = SimulationState::init(self.viewport.area());
             }
-            PhysicsMessage::Tick => self.tick(),
             PhysicsMessage::Viewport(message) => {
                 self.instruments.camera.degrade();
                 self.viewport.update(message);
@@ -140,11 +144,29 @@ impl PhysicsWidget {
     }
 
     /// Progress the simulation by one tick
-    fn tick(&mut self) {
+    ///
+    /// Returns the next time a tick can be triggered
+    pub fn tick(&mut self) -> Instant {
+        const TIME_DELTA: Duration = Duration::from_micros(1_000_000 / 60);
+
+        let now = Instant::now();
+        let Some(last_tick) = self.last_tick else {
+            self.last_tick = Some(now);
+            return now + TIME_DELTA;
+        };
+        let next = last_tick + TIME_DELTA;
+        if now < next {
+            return next;
+        }
+        self.last_tick = Some(now);
+        let next = now + TIME_DELTA;
+
         self.instruments.final_output.degrade();
         for obj in &mut self.state.moving {
             obj.tick();
         }
+
+        next
     }
 }
 
@@ -153,8 +175,6 @@ impl PhysicsWidget {
 pub enum PhysicsMessage {
     /// Reset the simulation configuration to its initial state
     Reset,
-    /// Progress the simulation by one tick
-    Tick,
     /// Update the visible area of the viewport
     Viewport(ViewportMessage),
 }

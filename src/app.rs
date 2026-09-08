@@ -1,6 +1,5 @@
 //! Contains the app's entry point and state struct
 
-use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,6 +11,7 @@ use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::conversion::window_event;
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
+use iced_winit::winit::event_loop::ControlFlow;
 use iced_winit::{Clipboard, winit};
 use nalgebra as na;
 use tracing::warn;
@@ -23,7 +23,7 @@ use winit::keyboard::Key;
 use winit::window::WindowAttributes;
 
 use crate::controls::coords::Physical;
-use crate::controls::{Controls, Message};
+use crate::controls::{Controls, Message, Response, Updates};
 use crate::instruments::{GpuContext, TargetContext};
 
 /// The entry point to run the app
@@ -56,86 +56,22 @@ impl winit::application::ApplicationHandler for Runner {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: winit::window::WindowId,
+        window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        use winit::event::KeyEvent;
-
-        let Self::Ready(ready) = self else {
-            return;
-        };
-
-        #[expect(clippy::wildcard_enum_match_arm)]
-        let control_flow = match event {
-            WindowEvent::RedrawRequested => ready.redraw(),
-            WindowEvent::CursorMoved { position, .. } => ready.cursor_moved(position),
-            WindowEvent::MouseInput { state, button, .. } => ready.mouse_input(button, state),
-            WindowEvent::MouseWheel { delta, .. } => ready.scrolled(delta),
-            WindowEvent::ModifiersChanged(modifiers) => ready.modifiers_changed(modifiers),
-            WindowEvent::Resized(_) => ready.resized(),
-            WindowEvent::CloseRequested => ControlFlow::Break(()),
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key: Key::Character(ref symbol),
-                        state: ElementState::Pressed,
-                        ..
-                    },
-                ..
-            } => ready.key_pressed(symbol.clone()),
-            _ => ControlFlow::Continue(()),
-        };
-        if control_flow == ControlFlow::Break(()) {
-            event_loop.exit();
+        if let Self::Ready(ready) = self {
+            ready.window_event(event_loop, window_id, event);
         }
+    }
 
-        // Map window event to iced event
-        let scale_factor = ready.target_ctx.window.scale_factor() as f32;
-        {
-            if let Some(event) = window_event(event, scale_factor, ready.controls.modifiers()) {
-                ready.events.push(event);
-            }
-        }
-
-        // If there are events pending
-        if !ready.events.is_empty() {
-            // We process them
-            let mut interface = UserInterface::build(
-                ready.controls.view(scale_factor),
-                ready.viewport.logical_size(),
-                std::mem::take(&mut ready.cache),
-                &mut ready.renderer,
-            );
-
-            let mut messages = Vec::new();
-
-            let _ = interface.update(
-                &ready.events,
-                ready.controls.cursor(),
-                &mut ready.renderer,
-                &mut ready.clipboard,
-                &mut messages,
-            );
-
-            ready.events.clear();
-            ready.cache = interface.into_cache();
-
-            // update our UI with any messages
-            for message in messages {
-                let response = ready
-                    .controls
-                    .update(&ready.gpu_ctx, &ready.target_ctx, message);
-                match response {
-                    ControlFlow::Continue(()) => (),
-                    ControlFlow::Break(()) => event_loop.exit(),
-                }
-            }
-
-            // and request a redraw
-            ready.target_ctx.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Self::Ready(ready) = self {
+            ready.about_to_wait(event_loop);
         }
     }
 }
+
+impl Runner {}
 
 /// Struct to hold all window and rendering state
 struct Ready {
@@ -150,6 +86,10 @@ struct Ready {
     controls: Controls,
     /// Whether we need to update render state due to a resize
     resized: bool,
+
+    // state of application
+    /// The next time we should poll the controller
+    next_poll: Option<Instant>,
 
     // objects used by iced but otherwise unused
     /// Iced renderer
@@ -259,17 +199,19 @@ impl Ready {
         let renderer = Renderer::new(engine, iced::Font::default(), iced::Pixels::from(16));
 
         // You should change this if you want to render continuously
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        event_loop.set_control_flow(ControlFlow::Wait);
 
         let events = Vec::new();
         let cache = Cache::new();
         let resized = false;
+        let next_poll = None;
 
         Self {
             gpu_ctx,
             target_ctx,
             controls,
             resized,
+            next_poll,
             renderer,
             events,
             cache,
@@ -278,12 +220,112 @@ impl Ready {
         }
     }
 
-    /// Draw the app to the window
-    fn redraw(&mut self) -> ControlFlow<()> {
-        if self.resized {
-            self.reconfigure_surface()?;
-            self.resized = false;
+    /// Handle winit window events
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        use winit::event::KeyEvent;
+
+        let now = Instant::now();
+        if let Some(next) = self.next_poll
+            && next <= now
+        {
+            let response = self.poll();
+            self.handle_response(response, event_loop);
         }
+
+        #[expect(clippy::wildcard_enum_match_arm)]
+        let response = match event {
+            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
+            WindowEvent::MouseInput { state, button, .. } => self.mouse_input(button, state),
+            WindowEvent::MouseWheel { delta, .. } => self.scrolled(delta),
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers_changed(modifiers),
+            WindowEvent::Resized(_) => self.resized(),
+            WindowEvent::CloseRequested => Response::Exit,
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key: Key::Character(ref symbol),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => self.key_pressed(symbol.clone()),
+            _ => Response::NoChange,
+        };
+        self.handle_response(response, event_loop);
+
+        // Map window event to iced event
+        let scale_factor = self.target_ctx.window.scale_factor() as f32;
+        {
+            if let Some(event) = window_event(event, scale_factor, self.controls.modifiers()) {
+                self.events.push(event);
+            }
+        }
+
+        // If there are events pending
+        if !self.events.is_empty() {
+            // We process them
+            let mut interface = UserInterface::build(
+                self.controls.view(scale_factor),
+                self.viewport.logical_size(),
+                std::mem::take(&mut self.cache),
+                &mut self.renderer,
+            );
+
+            let mut messages = Vec::new();
+
+            let _ = interface.update(
+                &self.events,
+                self.controls.cursor(),
+                &mut self.renderer,
+                &mut self.clipboard,
+                &mut messages,
+            );
+
+            self.events.clear();
+            self.cache = interface.into_cache();
+
+            // update our UI with any messages
+            for message in messages {
+                let response = self
+                    .controls
+                    .update(&self.gpu_ctx, &self.target_ctx, message);
+                self.handle_response(response, event_loop);
+            }
+
+            // and request a redraw
+            self.target_ctx.window.request_redraw();
+        }
+    }
+
+    /// Queue up custom redraw requests before waiting
+    fn about_to_wait(&self, event_loop: &ActiveEventLoop) {
+        let Some(next) = self.next_poll else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        };
+
+        let now = Instant::now();
+        if now < next {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+        } else {
+            self.target_ctx.window.request_redraw();
+        }
+    }
+
+    /// Draw the app to the window
+    fn redraw(&mut self) -> Response {
+        let response = if self.resized {
+            self.resized = false;
+            self.reconfigure_surface()
+        } else {
+            Response::default()
+        };
 
         let scale_factor = self.target_ctx.window.scale_factor() as f32;
         let frame = match self.target_ctx.surface.get_current_texture() {
@@ -297,7 +339,7 @@ impl Ready {
                 warn!("Error while drawing, try again next frame: {error}");
                 // Try rendering again next frame.
                 self.target_ctx.window.request_redraw();
-                return ControlFlow::Continue(());
+                return response;
             }
         };
 
@@ -365,11 +407,12 @@ impl Ready {
 
         // Present the frame
         frame.present();
-        ControlFlow::Continue(())
+
+        response
     }
 
     /// Setup the render state to a new window size
-    fn reconfigure_surface(&mut self) -> ControlFlow<()> {
+    fn reconfigure_surface(&mut self) -> Response {
         let PhysicalSize { width, height } = self.target_ctx.window.inner_size();
         self.target_ctx.config.width = width;
         self.target_ctx.config.height = height;
@@ -378,17 +421,18 @@ impl Ready {
         self.viewport = Viewport::with_physical_size(iced::Size::new(width, height), scale_factor);
 
         let message = Message::SetScaleFactor(scale_factor);
-        self.controls
-            .update(&self.gpu_ctx, &self.target_ctx, message)?;
-
+        let response = self
+            .controls
+            .update(&self.gpu_ctx, &self.target_ctx, message);
         self.target_ctx
             .surface
             .configure(&self.gpu_ctx.device, &self.target_ctx.config);
-        ControlFlow::Continue(())
+
+        response
     }
 
     /// Handle when the cursor moved
-    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) -> ControlFlow<()> {
+    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) -> Response {
         let PhysicalPosition { x, y } = position.cast();
         let position = Physical(na::Point2::new(x, y));
         let message = Message::CursorMoved(position);
@@ -397,14 +441,14 @@ impl Ready {
     }
 
     /// Handle when a mouse button was clicked
-    fn mouse_input(&mut self, button: MouseButton, state: ElementState) -> ControlFlow<()> {
+    fn mouse_input(&mut self, button: MouseButton, state: ElementState) -> Response {
         let message = Message::MouseInput { button, state };
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
     /// Handle when the mouse wheel was scrolled
-    fn scrolled(&mut self, delta: MouseScrollDelta) -> ControlFlow<()> {
+    fn scrolled(&mut self, delta: MouseScrollDelta) -> Response {
         use std::cmp::Ordering;
 
         let cmp = match delta {
@@ -416,30 +460,60 @@ impl Ready {
             Ordering::Equal => None,
             Ordering::Greater => Some(Message::ScrollUp),
         };
-        if let Some(message) = message {
-            self.controls
-                .update(&self.gpu_ctx, &self.target_ctx, message)?;
-        }
-        ControlFlow::Continue(())
+        let Some(message) = message else {
+            return Response::NoChange;
+        };
+        self.controls
+            .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
     /// Handle when a keyboard button was pressed
-    fn key_pressed(&mut self, key: SmolStr) -> ControlFlow<()> {
+    fn key_pressed(&mut self, key: SmolStr) -> Response {
         let message = Message::KeyPress(key);
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
     /// Handle when a modifier key was pressed
-    fn modifiers_changed(&mut self, modifiers: Modifiers) -> ControlFlow<()> {
+    fn modifiers_changed(&mut self, modifiers: Modifiers) -> Response {
         let message = Message::ModifiersChanged(modifiers.state());
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)
     }
 
     /// Handle when a resize was requested
-    const fn resized(&mut self) -> ControlFlow<()> {
+    const fn resized(&mut self) -> Response {
         self.resized = true;
-        ControlFlow::Continue(())
+        Response::NoChange
+    }
+
+    /// Do a poll to the controller
+    fn poll(&mut self) -> Response {
+        self.next_poll = None;
+        let message = Message::Poll;
+        self.controls
+            .update(&self.gpu_ctx, &self.target_ctx, message)
+    }
+
+    /// Handle response from the controller
+    #[expect(clippy::needless_pass_by_value, reason = "response is consumed here")]
+    fn handle_response(&mut self, response: Response, event_loop: &ActiveEventLoop) {
+        match response {
+            Response::NoChange => (),
+            Response::Exit => event_loop.exit(),
+            Response::Updates(Updates::NextTime(instant)) => {
+                self.next_poll = Some(instant);
+                let now = Instant::now();
+                if instant <= now {
+                    self.target_ctx.window.request_redraw();
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(instant));
+                }
+            }
+            Response::Updates(Updates::OnEvent) => {
+                self.next_poll = None;
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+        }
     }
 }

@@ -58,6 +58,10 @@ pub struct MeshInstancing {
     meshes: Vec<SingleMeshInstancing>,
 }
 
+/// Index into mesh instancing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MeshIndex(u32);
+
 impl MeshInstancing {
     /// Create an empty storage for meshes and its instances
     pub const fn new() -> Self {
@@ -65,13 +69,21 @@ impl MeshInstancing {
     }
 
     /// Insert a new mesh with its instances to this storage
-    pub fn push(&mut self, single: SingleMeshInstancing) {
+    pub fn push(&mut self, single: SingleMeshInstancing) -> MeshIndex {
+        let index = MeshIndex(self.meshes.len() as u32);
         self.meshes.push(single);
+        index
     }
 
     /// Get a slice of all meshes with their instances
     pub fn slice(&self) -> &[SingleMeshInstancing] {
         &self.meshes
+    }
+
+    /// Update the instances for the indexed mesh
+    pub fn update_instances(&mut self, ctx: &GpuContext, index: MeshIndex, instances: &Instances) {
+        let mesh = &mut self.meshes[index.0 as usize];
+        mesh.instances.update(ctx, instances);
     }
 }
 

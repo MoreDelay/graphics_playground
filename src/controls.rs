@@ -19,7 +19,7 @@ use nalgebra as na;
 
 use crate::controls::coords::{LocalCoords, Physical};
 use crate::hello_triangle::HelloWidget;
-use crate::image::{ClampedSplit, Image, ImageMessage, ImageWidget, SplitReaction};
+use crate::image::{ClampedSplit, Image, ImageMessage, ImageWidget};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::physics::{PhysicsMessage, PhysicsWidget};
@@ -157,9 +157,11 @@ impl Controls {
             CurrentScene::Image(image) => image.split(),
             CurrentScene::Physics(_) => None,
         };
+        let dragging = self.mouse_button == ElementState::Pressed;
         let placeholder = PlaceholderWidget {
             bounds,
             split,
+            dragging,
             bg_color,
             scale_factor,
         };
@@ -465,27 +467,29 @@ impl Controls {
 
     /// Handle a mouse button pressed
     fn mouse_input(&mut self, button: MouseButton, state: ElementState) {
-        let MouseButton::Left = button else {
-            return;
-        };
-        match state {
-            ElementState::Pressed => {
+        match (button, state) {
+            (MouseButton::Left, ElementState::Pressed) => {
                 if let Some(pos) = self.cursor.pos()
                     && self.viewport.coords().local_point(pos).is_some()
                 {
-                    self.mouse_button = state;
+                    self.mouse_button = ElementState::Pressed;
+                }
+
+                if let CurrentScene::Physics(widget) = &mut self.scene {
+                    let message = PhysicsMessage::YoinkUp;
+                    widget.update(message);
                 }
             }
-            ElementState::Released => self.mouse_button = ElementState::Released,
-        }
-        match &mut self.scene {
-            CurrentScene::HelloTriangle(_) => (),
-            CurrentScene::Image(widget) => {
-                let active = self.mouse_button == ElementState::Pressed;
-                let message = ImageMessage::Panning { active };
-                widget.update(message);
+            (MouseButton::Left, ElementState::Released) => {
+                self.mouse_button = ElementState::Released;
             }
-            CurrentScene::Physics(_) => (),
+            (MouseButton::Right, ElementState::Pressed) => {
+                if let CurrentScene::Physics(widget) = &mut self.scene {
+                    let message = PhysicsMessage::YoinkDown;
+                    widget.update(message);
+                }
+            }
+            _ => (),
         }
     }
 
@@ -565,7 +569,9 @@ pub struct PlaceholderWidget<'a> {
     /// The current layout bounds get stored here
     bounds: &'a Cell<Option<PhysicalInsets<u32>>>,
     /// The split location
-    split: Option<SplitReaction>,
+    split: Option<ClampedSplit>,
+    /// Whether the left mouse button is pressed
+    dragging: bool,
     /// The background color to draw
     bg_color: Color,
     /// The current scale factor
@@ -669,8 +675,7 @@ where
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        let reaction = matches!(self.split, Some(SplitReaction { react: true, .. }));
-        if !reaction {
+        if self.dragging {
             return mouse::Interaction::None;
         }
 
@@ -714,7 +719,7 @@ impl PlaceholderWidget<'_> {
         let bounds = self.compute_bounds(layout);
         let coords = LocalCoords::new(bounds, self.scale_factor);
         let half = coords.size().width as f32 / 2.;
-        let x = match self.split?.split {
+        let x = match self.split? {
             ClampedSplit::FullLeft => -half,
             ClampedSplit::Split(pos) => pos,
             ClampedSplit::FullRight => half,

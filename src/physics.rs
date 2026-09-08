@@ -28,6 +28,19 @@ use crate::instruments::{GpuContext, TargetContext, Use};
 use crate::model::{MeshCpu, MeshIndex, MeshInstancing, SingleMeshInstancing};
 use crate::viewport::{ScrollableViewportState, ViewportGui, ViewportMessage};
 
+/// Messages that can be sent to the [`PhysicsWidget`]
+#[derive(Debug, Clone, Copy)]
+pub enum PhysicsMessage {
+    /// Reset the simulation configuration to its initial state
+    Reset,
+    /// Update the visible area of the viewport
+    Viewport(ViewportMessage),
+    /// Yoink up the box
+    YoinkUp,
+    /// Yoink down the box
+    YoinkDown,
+}
+
 /// The 2d physics simulation widget
 pub struct PhysicsWidget {
     /// Rendering instruments of this widget
@@ -130,6 +143,16 @@ impl PhysicsWidget {
                 self.instruments.camera.degrade();
                 self.viewport.update(message);
             }
+            PhysicsMessage::YoinkUp => {
+                for obj in &mut self.state.moving {
+                    obj.yoink_up();
+                }
+            }
+            PhysicsMessage::YoinkDown => {
+                for obj in &mut self.state.moving {
+                    obj.yoink_down();
+                }
+            }
         }
     }
 
@@ -170,15 +193,6 @@ impl PhysicsWidget {
     }
 }
 
-/// Messages that can be sent to the [`PhysicsWidget`]
-#[derive(Debug, Clone, Copy)]
-pub enum PhysicsMessage {
-    /// Reset the simulation configuration to its initial state
-    Reset,
-    /// Update the visible area of the viewport
-    Viewport(ViewportMessage),
-}
-
 /// The state of the physics simulation
 struct SimulationState {
     /// The objects that do not move
@@ -214,7 +228,7 @@ impl SimulationState {
         let center = na::Point2::new(1.0, 1.0);
         let square = MovingBody {
             shape: MovingShape::Rectangle(Rectangle::new(size, rotation, center)),
-            velocity: na::Vector2::zeros(),
+            velocity: na::Vector2::new(0., 5.),
             angular_velocity: 0.,
         };
         let moving = vec![square];
@@ -250,6 +264,16 @@ impl MovingBody {
     const STEP: f32 = 0.01;
     /// The default gravity forced applied on each step
     const GRAVITY: na::Vector2<f32> = na::Vector2::new(0., -9.8);
+
+    /// Yoink up the object
+    fn yoink_up(&mut self) {
+        self.velocity += na::Vector2::new(0., 4.);
+    }
+
+    /// Yoink down the object
+    fn yoink_down(&mut self) {
+        self.velocity += na::Vector2::new(0., -4.);
+    }
 
     /// Move this object along by a single tick
     fn tick(&mut self) {

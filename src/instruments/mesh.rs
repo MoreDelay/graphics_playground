@@ -4,6 +4,7 @@ pub mod primitives;
 pub mod quad;
 
 use std::marker::PhantomData;
+use std::num::NonZeroU64;
 
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt as _;
@@ -127,6 +128,10 @@ pub struct InstanceBuffer<T: InstanceData> {
 }
 
 impl<T: InstanceData> InstanceBuffer<T> {
+    /// Memory size of a single [`InstanceRaw`]
+    const SINGLE_SIZE: NonZeroU64 =
+        NonZeroU64::new(std::mem::size_of::<InstanceRaw>() as u64).expect("struct not empty");
+
     /// Upload the vertex data by allocating a new buffer
     pub fn upload(ctx: &GpuContext, data: &T) -> Self {
         let data = data.data();
@@ -136,7 +141,7 @@ impl<T: InstanceData> InstanceBuffer<T> {
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::VERTEX,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
         Self {
             buffer,
@@ -148,6 +153,17 @@ impl<T: InstanceData> InstanceBuffer<T> {
     /// Get the number of instances stored in this buffer
     pub const fn count(&self) -> u32 {
         self.count
+    }
+
+    /// Upload new instance matrices for this mesh
+    pub fn update(&self, ctx: &GpuContext, data: &T) {
+        let data = data.data();
+        let size = data.len() as u64 * Self::SINGLE_SIZE.get();
+        let size = NonZeroU64::new(size).expect("empty instance buffer not yet supported");
+        ctx.queue
+            .write_buffer_with(&self.buffer, 0, size)
+            .expect("failed creating temporary buffer for upload")
+            .copy_from_slice(bytemuck::cast_slice(data));
     }
 }
 

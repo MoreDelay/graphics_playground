@@ -23,7 +23,7 @@ use crate::instruments::mesh::primitives::{
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::pipeline::physics::{PhysicsObjectPipeline, PhysicsObjectPipelineLayout};
 use crate::instruments::{GpuContext, TargetContext, Use};
-use crate::model::{MeshCpu, MeshInstancing, SingleMeshInstancing};
+use crate::model::{MeshCpu, MeshIndex, MeshInstancing, SingleMeshInstancing};
 use crate::viewport::{ScrollableViewportState, ViewportGui, ViewportMessage};
 
 /// The 2d physics simulation widget
@@ -57,8 +57,8 @@ impl PhysicsWidget {
         let mut instancing = MeshInstancing::new();
         let rect = Rectangle::mesh().upload(ctx);
         let rect = SingleMeshInstancing::new(rect, rect_instances);
-        instancing.push(rect);
-        let instruments = PhysicsInstruments::new(ctx, target, instancing);
+        let index_temp = instancing.push(rect);
+        let instruments = PhysicsInstruments::new(ctx, target, instancing, index_temp);
 
         Self {
             instruments,
@@ -84,6 +84,7 @@ impl PhysicsWidget {
         } = context;
 
         self.instruments.create_camera(ctx, &self.viewport);
+        self.instruments.update_instances(ctx, &self.state);
 
         let output = self.instruments.create_output(ctx, passthru, viewport)?;
         let camera = self.instruments.camera.active();
@@ -141,7 +142,9 @@ impl PhysicsWidget {
     /// Progress the simulation by one tick
     fn tick(&mut self) {
         self.instruments.final_output.degrade();
-        // TODO: doing nothing yet
+        for obj in &mut self.state.moving {
+            obj.tick();
+        }
     }
 }
 
@@ -217,15 +220,32 @@ struct MovingBody {
     /// The shape of this object
     shape: MovingShape,
     /// The current velocity
-    #[expect(unused)]
     velocity: na::Vector2<f32>,
     /// The current counter-clockwise angular velocity
-    #[expect(unused)]
     angular_velocity: f32,
 }
 
+impl MovingBody {
+    /// Hard-coded step size of the physics simulation
+    const STEP: f32 = 0.01;
+    /// The default gravity forced applied on each step
+    const GRAVITY: na::Vector2<f32> = na::Vector2::new(0., -9.8);
+
+    /// Move this object along by a single tick
+    fn tick(&mut self) {
+        match &mut self.shape {
+            MovingShape::Rectangle(rect) => {
+                rect.center += Self::STEP * self.velocity;
+                rect.rotation = Self::STEP.mul_add(self.angular_velocity, rect.rotation);
+            }
+        }
+
+        self.velocity += Self::STEP * Self::GRAVITY;
+    }
+}
+
 /// All different types of movable shapes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum MovingShape {
     /// A movable rectangle
     Rectangle(Rectangle),
@@ -243,7 +263,7 @@ struct HalfSpace {
 }
 
 /// A rectangle
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Rectangle {
     /// The size of the rectangle in x and y dimension
     size: na::Vector2<f32>,
@@ -314,13 +334,20 @@ struct PhysicsInstruments {
     pipeline: PhysicsObjectPipeline,
     /// Objects influenced by physics
     moving: MeshInstancing,
+    /// Index returned by [`MeshInstancing`]
+    index_temp: MeshIndex,
     /// Buffer holding the camera location
     camera: Use<SimpleBufferBind<ViewportRaw, VisibleVertex>>,
 }
 
 impl PhysicsInstruments {
     /// Create a new set of rendering instruments for the physics widget
-    fn new(ctx: &GpuContext, target: &TargetContext, moving: MeshInstancing) -> Self {
+    fn new(
+        ctx: &GpuContext,
+        target: &TargetContext,
+        moving: MeshInstancing,
+        index_temp: MeshIndex,
+    ) -> Self {
         let buffer_layout = SimpleBufferBindLayout::new(ctx, Some("Physics Buffer Layout"));
         let layout = PhysicsObjectPipelineLayout::new(ctx, &buffer_layout);
         let pipeline = PhysicsObjectPipeline::new(ctx, &layout, target.config.format);
@@ -331,6 +358,7 @@ impl PhysicsInstruments {
             final_output: Use::default(),
             pipeline,
             moving,
+            index_temp,
             camera,
         }
     }
@@ -400,5 +428,21 @@ impl PhysicsInstruments {
             }
         };
         self.camera = Use::Active(camera);
+    }
+
+    /// Update the instances of all moving objects
+    fn update_instances(&mut self, ctx: &GpuContext, state: &SimulationState) {
+        let rect_instances: Vec<_> = state
+            .moving
+            .iter()
+            .map(|obj| match &obj.shape {
+                MovingShape::Rectangle(rect) => rect.instance(),
+            })
+            .collect();
+
+        let rect_instances = Instances::new(rect_instances);
+
+        self.moving
+            .update_instances(ctx, self.index_temp, &rect_instances);
     }
 }

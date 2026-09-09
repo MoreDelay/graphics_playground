@@ -7,6 +7,7 @@ use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
 use crate::controls::RenderContext;
+use crate::geometry::{HalfSpace, Rectangle};
 use crate::instruments::bind::image::ViewportRaw;
 use crate::instruments::buffer::{
     SimpleBuffer,
@@ -15,17 +16,11 @@ use crate::instruments::buffer::{
     VisibleVertex,
 };
 use crate::instruments::mesh::InstanceBuffer;
-use crate::instruments::mesh::primitives::{
-    InstanceRaw,
-    Instances,
-    Triangles,
-    VertexRaw,
-    Vertices,
-};
+use crate::instruments::mesh::primitives::Instances;
 use crate::instruments::pipeline::passthru::{PassThruPipeline, PassThruTexture};
 use crate::instruments::pipeline::physics::{PhysicsObjectPipeline, PhysicsObjectPipelineLayout};
 use crate::instruments::{GpuContext, TargetContext, Use};
-use crate::model::{MeshCpu, MeshIndex, MeshInstancing, SingleMeshInstancing};
+use crate::model::{MeshIndex, MeshInstancing, SingleMeshInstancing};
 use crate::viewport::{ScrollableViewportState, ViewportGui, ViewportMessage};
 
 /// Messages that can be sent to the [`PhysicsWidget`]
@@ -205,22 +200,14 @@ struct SimulationState {
 impl SimulationState {
     /// Create the initial state of the hard-coded scenario
     fn init(size: na::Vector2<f32>) -> Self {
-        let edge_left = FixedBody::HalfSpace(HalfSpace {
-            normal: na::Vector2::new(-1., 0.),
-            distance: 0.,
-        });
-        let edge_right = FixedBody::HalfSpace(HalfSpace {
-            normal: na::Vector2::new(1., 0.),
-            distance: size.x,
-        });
-        let edge_top = FixedBody::HalfSpace(HalfSpace {
-            normal: na::Vector2::new(0., 1.),
-            distance: size.y,
-        });
-        let edge_bottom = FixedBody::HalfSpace(HalfSpace {
-            normal: na::Vector2::new(0., -1.),
-            distance: 0.,
-        });
+        let bot_lef = na::Point2::origin();
+        let top_lef = na::Point2::new(0., size.y);
+        let bot_rig = na::Point2::new(size.x, 0.);
+        let top_rig = na::Point2::new(size.x, size.y);
+        let edge_left = FixedBody::HalfSpace(HalfSpace::from_points(bot_lef, top_lef));
+        let edge_top = FixedBody::HalfSpace(HalfSpace::from_points(top_lef, top_rig));
+        let edge_right = FixedBody::HalfSpace(HalfSpace::from_points(top_rig, bot_rig));
+        let edge_bottom = FixedBody::HalfSpace(HalfSpace::from_points(bot_rig, bot_lef));
         let fixed = vec![edge_left, edge_right, edge_top, edge_bottom];
 
         let size = na::Vector2::new(0.5, 0.3);
@@ -279,8 +266,9 @@ impl MovingBody {
     fn tick(&mut self) {
         match &mut self.shape {
             MovingShape::Rectangle(rect) => {
-                rect.center += Self::STEP * self.velocity;
-                rect.rotation = Self::STEP.mul_add(self.angular_velocity, rect.rotation);
+                let translation = Self::STEP * self.velocity;
+                let angle = Self::STEP * self.angular_velocity;
+                rect.transform(translation, angle);
             }
         }
 
@@ -293,80 +281,6 @@ impl MovingBody {
 enum MovingShape {
     /// A movable rectangle
     Rectangle(Rectangle),
-}
-
-/// A half space, splitting the whole space in inner and outer half
-#[derive(Debug, Clone)]
-struct HalfSpace {
-    /// The normal direction of the split line
-    #[expect(unused)]
-    normal: na::Vector2<f32>,
-    /// The signed distance from the origin to the split line
-    #[expect(unused)]
-    distance: f32,
-}
-
-/// A rectangle
-#[derive(Debug, Clone, Copy)]
-pub struct Rectangle {
-    /// The size of the rectangle in x and y dimension
-    size: na::Vector2<f32>,
-    /// The counter-clockwise rotation
-    rotation: f32,
-    /// The location of the centroid
-    center: na::Point2<f32>,
-}
-
-impl Rectangle {
-    /// Create a new rectangle with the provided size and pose
-    pub const fn new(size: na::Vector2<f32>, rotation: f32, center: na::Point2<f32>) -> Self {
-        Self {
-            size,
-            rotation,
-            center,
-        }
-    }
-
-    /// Create the base mesh for a rectangle
-    ///
-    /// This mesh has its vertices at x, y in {-1, 1}. These should be transformed by the instance
-    /// matrix to align with the expected shape.
-    pub fn mesh() -> MeshCpu {
-        let red = [1., 0., 0.];
-        let green = [0., 1., 0.];
-        let blue = [0., 0., 1.];
-        let white = [1., 1., 1.];
-
-        let nw = VertexRaw::new([-1., 1.], [0., 0.], red);
-        let ne = VertexRaw::new([1., 1.], [1., 0.], green);
-        let sw = VertexRaw::new([-1., -1.], [0., 1.], blue);
-        let se = VertexRaw::new([1., -1.], [1., 1.], white);
-
-        let vertices = vec![nw, ne, sw, se];
-        let vertices = Vertices::new(vertices);
-
-        let tri0 = na::Vector3::new(0, 2, 1);
-        let tri1 = na::Vector3::new(1, 2, 3);
-        let indices = vec![tri0, tri1];
-        let indices = Triangles::new(indices);
-
-        MeshCpu::new(vertices, indices)
-    }
-
-    /// Create an instance transform for this rectangle
-    pub fn instance(&self) -> InstanceRaw {
-        let stretch = na::Matrix2::from_diagonal(&(self.size / 2.));
-        let transform = na::Rotation2::new(self.rotation) * stretch;
-
-        let model0 = transform.column(0).to_homogeneous();
-        let model1 = transform.column(1).to_homogeneous();
-        let model2 = na::Point2::from(self.center).to_homogeneous();
-
-        let model0 = model0.into();
-        let model1 = model1.into();
-        let model2 = model2.into();
-        InstanceRaw::new(model0, model1, model2)
-    }
 }
 
 /// The rendering instruments for the physics simulation

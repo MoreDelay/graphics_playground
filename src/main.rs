@@ -2,6 +2,7 @@ use iced_winit::winit::error::EventLoopError;
 
 mod app;
 mod controls;
+mod geometry;
 mod hello_triangle;
 mod image;
 mod instruments;

@@ -2,10 +2,10 @@
 
 use nalgebra as na;
 
+use crate::geometry::Rectangle;
 use crate::instruments::GpuContext;
 use crate::instruments::mesh::primitives::InstanceRaw;
 use crate::model::MeshGpu;
-use crate::physics::Rectangle;
 
 /// A quad mesh
 ///

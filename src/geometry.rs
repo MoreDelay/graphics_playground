@@ -40,10 +40,144 @@ impl HalfSpace {
     /// Compute the signed shortest distance between the given point and the dividing line
     ///
     /// A negative distance indicates the point lies on the inside of this half space.
-    #[expect(unused)]
     pub fn distance(&self, point: na::Point2<f32>) -> f32 {
         let point = point.to_homogeneous();
         self.normal.dot(&point) / self.normal.xy().norm()
+    }
+
+    /// Get the normal vector of the dividing line
+    pub fn normal(&self) -> na::UnitVector2<f32> {
+        na::Unit::new_normalize(self.normal.xy())
+    }
+
+    /// Get the point that lies on the line and is closest to the origin
+    pub fn closest_to_origin(&self) -> na::Point2<f32> {
+        let dist = self.distance(na::Point2::origin());
+        let point = -self.normal().into_inner() * dist;
+        na::Point2::from(point)
+    }
+
+    /// Finds the intersection point of two half spaces
+    pub fn intersection(&self, other: &Self) -> Option<na::Point2<f32>> {
+        let matrix = na::Matrix3::from_rows(&[
+            self.normal.into_inner().transpose(),
+            other.normal.into_inner().transpose(),
+            na::Vector3::z().transpose(),
+        ]);
+        let target = na::Vector3::z();
+        let solution = na::ColPivQR::new(matrix).solve(&target)?;
+        Some(na::Point2::from(solution.xy()))
+    }
+}
+
+/// A line in 2d space
+#[derive(Debug, Clone, Copy)]
+pub struct Line(HalfSpace);
+
+impl Line {
+    /// Constructor by point and direction
+    #[expect(unused)]
+    pub fn from_point_and_direction(
+        point: na::Point2<f32>,
+        direction: na::UnitVector2<f32>,
+    ) -> Self {
+        Self(HalfSpace::from_point_and_direction(point, direction))
+    }
+
+    /// Constructor by two points
+    pub fn from_points(p1: na::Point2<f32>, p2: na::Point2<f32>) -> Self {
+        Self(HalfSpace::from_points(p1, p2))
+    }
+
+    /// Compute the shortest distance between the given point and this line
+    #[expect(unused)]
+    pub fn distance(&self, point: na::Point2<f32>) -> f32 {
+        self.0.distance(point).abs()
+    }
+
+    /// Get the point that lies on the line and is closest to the origin
+    pub fn closest_to_origin(&self) -> na::Point2<f32> {
+        self.0.closest_to_origin()
+    }
+
+    /// Finds the intersection point of two lines
+    pub fn intersection(&self, other: &Self) -> Option<na::Point2<f32>> {
+        self.0.intersection(&other.0)
+    }
+}
+
+/// A line segment in 2d space
+pub struct LineSegment {
+    /// The infinite line on which this segment lies
+    line: Line,
+    /// First end point as distance from the closest point on the line to the origin
+    start: f32,
+    /// Second end point as distance from the closest point on the line to the origin
+    end: f32,
+}
+
+impl LineSegment {
+    /// Constructor by two points
+    #[expect(unused)]
+    pub fn from_points(p1: na::Point2<f32>, p2: na::Point2<f32>) -> Self {
+        let line = Line::from_points(p1, p2);
+        let normal = line.0.normal();
+        let dir = Self::direction(normal);
+        let mut start = dir.dot(&p1.coords);
+        let mut end = dir.dot(&p2.coords);
+        if start <= end {
+            Self { line, start, end }
+        } else {
+            let (start, end) = (end, start);
+            Self { line, start, end }
+        }
+    }
+
+    /// Get the start point
+    #[expect(unused)]
+    pub fn start(&self) -> na::Point2<f32> {
+        self.offset_point(self.start)
+    }
+
+    /// Get the end point
+    #[expect(unused)]
+    pub fn end(&self) -> na::Point2<f32> {
+        self.offset_point(self.end)
+    }
+
+    /// Finds the intersection point of two line segments
+    #[expect(unused)]
+    pub fn intersecttion(&self, other: &Self) -> Option<na::Point2<f32>> {
+        let intersection = self.line.intersection(&other.line)?;
+        let offset = self.line_offset(intersection);
+        let inside_segment = self.end >= offset && offset >= self.start;
+        inside_segment.then_some(intersection)
+    }
+
+    /// Compute the direction vector from a line's normal vector
+    fn direction(normal: na::UnitVector2<f32>) -> na::UnitVector2<f32> {
+        let n = normal.into_inner();
+        na::Unit::new_unchecked(na::Vector2::new(-n.y, n.x))
+    }
+
+    /// Compute the perpendicular offset to the closest point to the origin
+    ///
+    /// This is basically the distance of query point to the line defined by the point closest to
+    /// the origin and the normal rotated by 90 degrees.
+    fn line_offset(&self, point: na::Point2<f32>) -> f32 {
+        let normal = self.line.0.normal();
+        let dir = Self::direction(normal).into_inner();
+        dir.dot(&point.coords)
+    }
+
+    /// Offset a point along the line starting from the closest point to the origin
+    ///
+    /// The offset direction is a 90 degree rotation from the line normal.
+    fn offset_point(&self, offset: f32) -> na::Point2<f32> {
+        let normal = self.line.0.normal();
+        let dir = Self::direction(normal).into_inner();
+        let point = self.line.closest_to_origin();
+        point + dir * offset
     }
 }
 

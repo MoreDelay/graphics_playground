@@ -5,9 +5,11 @@ mod render;
 
 use std::path::Path;
 
+use derive_more::Display;
 use iced::wgpu;
-use iced_wgpu::core::SmolStr;
+use iced_widget::combo_box;
 use iced_winit::winit::dpi::PhysicalSize;
+use iced_winit::winit::keyboard::{Key, NamedKey};
 use nalgebra as na;
 
 use crate::controls::RenderContext;
@@ -33,8 +35,10 @@ pub struct ImageWidget {
 
     /// The draw parameters used the last time
     params: DrawParameters,
-    /// The state of the image split
-    split: Split,
+    /// The current display mode
+    view: ViewState,
+    /// Combo box state for the image view mode selection
+    combo_box_view: combo_box::State<ViewMode>,
 }
 
 impl ImageWidget {
@@ -46,26 +50,39 @@ impl ImageWidget {
             viewport: ScrollableViewportState::new(area, view, 1.),
             filter: ImageFilter::default(),
         };
+        let combo_box_view = combo_box::State::new(vec![ViewMode::Single, ViewMode::Split]);
 
         Self {
             meta: ImageMetaInstruments::new(),
             left: None,
             right: None,
             params,
-            split: Split::default(),
+            view: ViewState::default(),
+            combo_box_view,
         }
     }
 
     /// Get the current image split position
     pub const fn split(&self) -> Option<ClampedSplit> {
         let got_two = self.left.is_some() && self.right.is_some();
-        if got_two {
+        if got_two && let ViewState::Split(split) = self.view {
             let width = self.params.viewport.size().width as f32;
-            let split = self.split.clamped(width);
-            Some(split)
+            Some(split.clamped(width))
         } else {
             None
         }
+    }
+
+    /// Get the current view selection
+    pub const fn view_selection(&self) -> ViewMode {
+        self.view.as_mode()
+    }
+
+    /// Get a reference to the view mode combobox
+    ///
+    /// TODO: should be replaced by a method that creates all image-controls itself
+    pub const fn combo_box_view(&self) -> &combo_box::State<ViewMode> {
+        &self.combo_box_view
     }
 
     /// Get the latest rendering result
@@ -96,13 +113,18 @@ impl ImageWidget {
 
         let output = self.meta.create_output(ctx, passthru, viewport)?;
 
-        match (&self.left, &self.right) {
-            (None, _) => return None,
-            (Some(left), None) => {
+        match (&self.left, &self.right, self.view) {
+            (None, _, _) => return None,
+            (Some(left), None, _) => {
                 let left = left.instruments.output()?;
                 passthru.full_draw(encoder, left, output.view());
             }
-            (Some(left), Some(right)) => {
+            (Some(left), Some(right), ViewState::Single(index)) => {
+                let image = if index == 0 { left } else { right };
+                let image = image.instruments.output()?;
+                passthru.full_draw(encoder, image, output.view());
+            }
+            (Some(left), Some(right), ViewState::Split(split)) => {
                 let left = left.instruments.output()?;
                 let right = right.instruments.output()?;
                 let width = params.viewport.size().width as f32;
@@ -113,7 +135,7 @@ impl ImageWidget {
                     left,
                     right,
                     output.view(),
-                    self.split.clamped(width),
+                    split.clamped(width),
                 );
             }
         }
@@ -130,6 +152,9 @@ impl ImageWidget {
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
             ImageMessage::DragSplit { active } => self.drag_split(active),
+            ImageMessage::SetViewMode(selection) => self.set_view_mode(selection),
+            ImageMessage::CycleViewMode => self.cycle_view_mode(),
+            ImageMessage::CycleImage { direction } => self.cycle_image(direction),
         }
     }
 
@@ -185,7 +210,9 @@ impl ImageWidget {
         std::mem::swap(&mut self.left, &mut self.right);
         self.left = Some(SingleImageState::new(image));
 
-        self.split = Split::Set(ClampedSplit::Split(0.));
+        // Reset viewing settings when new image was loaded
+        let split = Split::Set(ClampedSplit::Split(0.));
+        self.view = ViewState::Split(split);
 
         let left = self.left.as_ref().map_or_default(|v| v.data.size());
         let right = self.right.as_ref().map_or_default(|v| v.data.size());
@@ -210,8 +237,10 @@ impl ImageWidget {
             right.instruments.resized();
         }
 
-        if let Split::Set(split) = self.split {
-            self.split = Split::Set(split.clamped(size.width as f32));
+        if let ViewState::Split(split) = &mut self.view
+            && let Split::Set(inner) = split
+        {
+            *split = Split::Set(inner.clamped(size.width as f32));
         }
     }
 
@@ -248,18 +277,17 @@ impl ImageWidget {
     fn pan(&mut self, pan_vector: na::Vector2<f32>) {
         self.meta.panned();
 
-        match self.split {
-            Split::Set(_) => {
+        match &mut self.view {
+            ViewState::Single(_) | ViewState::Split(Split::Set(_)) => {
                 for image in self.iter_images_mut() {
                     image.instruments.panned();
                 }
 
                 self.params.viewport.pan(pan_vector);
             }
-            Split::Dragging(pos) => {
+            ViewState::Split(Split::Dragging(pos)) => {
                 // only final image is out-of-date
-                let x = pan_vector.x;
-                self.split = Split::Dragging(pos + x);
+                *pos += pan_vector.x;
             }
         }
     }
@@ -297,11 +325,64 @@ impl ImageWidget {
 
     /// Update whether the split is being dragged
     const fn drag_split(&mut self, active: bool) {
-        let width = self.params.viewport.size().width as f32;
-        self.split = match active {
-            true => self.split.dragging(width),
-            false => Split::Set(self.split.clamped(width)),
+        let ViewState::Split(split) = &mut self.view else {
+            return;
         };
+
+        let width = self.params.viewport.size().width as f32;
+        *split = match active {
+            true => split.dragging(width),
+            false => Split::Set(split.clamped(width)),
+        };
+    }
+
+    /// Set the view mode from a selection, preserving the current single-image index
+    fn set_view_mode(&mut self, selection: ViewMode) {
+        if self.view.as_mode() == selection {
+            return;
+        }
+
+        let next_view = match (selection, self.view) {
+            (ViewMode::Single, ViewState::Split(_)) => ViewState::Single(0),
+            (ViewMode::Split, ViewState::Single(_)) => ViewState::Split(Split::new()),
+            _ => return,
+        };
+
+        self.view = next_view;
+        // Only the final composition is out-of-date, the individual image outputs remain valid
+        self.meta.panned();
+    }
+
+    /// Cycle to the next view mode
+    fn cycle_view_mode(&mut self) {
+        // Entering single mode always shows the newest image first
+        self.view = match self.view {
+            ViewState::Single(_) => ViewState::Split(Split::new()),
+            ViewState::Split(_) => ViewState::Single(0),
+        };
+        // Only the final composition is out-of-date, the individual image outputs remain valid
+        self.meta.panned();
+    }
+
+    /// Show the next or previous loaded image
+    ///
+    /// Only applies in [`ViewMode::Single`] mode with two images loaded.
+    fn cycle_image(&mut self, direction: CycleDirection) {
+        let ViewState::Single(index) = self.view else {
+            return;
+        };
+        if self.left.is_none() || self.right.is_none() {
+            return;
+        }
+
+        let next = u8::from(direction == CycleDirection::Next);
+        if next == index {
+            return;
+        }
+
+        self.view = ViewState::Single(next);
+        // Only the final composition is out-of-date, the individual image outputs remain valid
+        self.meta.panned();
     }
 
     /// Iterate over the state of all loaded images
@@ -324,6 +405,11 @@ enum Split {
 }
 
 impl Split {
+    /// Create the default [`Split`]
+    const fn new() -> Self {
+        Self::Set(ClampedSplit::Split(0.))
+    }
+
     /// Create the corresponding clamped split
     const fn clamped(self, width: f32) -> ClampedSplit {
         match self {
@@ -345,7 +431,7 @@ impl Split {
 
 impl Default for Split {
     fn default() -> Self {
-        Self::Set(ClampedSplit::default())
+        Self::new()
     }
 }
 
@@ -394,8 +480,56 @@ impl SingleImageState {
     }
 }
 
+/// How the loaded images are displayed
+#[derive(Debug, Clone, Copy)]
+enum ViewState {
+    /// Show one image at a time; the payload is the index of the shown image
+    Single(u8),
+    /// Show both images side by side, split by the split bar
+    Split(Split),
+}
+
+impl ViewState {
+    /// Create the default [`ViewMode`]
+    const fn new() -> Self {
+        Self::Single(0)
+    }
+
+    /// The [`ViewMode`] corresponding to the current state
+    const fn as_mode(self) -> ViewMode {
+        match self {
+            Self::Single(_) => ViewMode::Single,
+            Self::Split(_) => ViewMode::Split,
+        }
+    }
+}
+
+impl Default for ViewState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Selectable view options without payload (for the combo box)
+#[derive(Debug, Clone, Copy, Display, PartialEq, Eq)]
+pub enum ViewMode {
+    /// Show one image at a time
+    Single,
+    /// Show both images side by side
+    Split,
+}
+
+/// Direction to cycle between loaded images
+#[derive(Debug, Clone, Copy, Display, PartialEq, Eq)]
+pub enum CycleDirection {
+    /// Next image
+    Next,
+    /// Previous image
+    Prev,
+}
+
 /// The messages to update the image widget state
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ImageMessage {
     /// Display a new image
     SetImage(Image),
@@ -410,56 +544,59 @@ pub enum ImageMessage {
         /// Whether the split is now actively dragged or no longer dragged
         active: bool,
     },
-}
-
-impl std::fmt::Debug for ImageMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SetImage(image) => f
-                .debug_struct("SetImage")
-                .field(
-                    "image",
-                    &format!("Image({}x{})", image.width(), image.height()),
-                )
-                .finish(),
-            Self::Viewport(viewport) => f.debug_tuple("Viewport").field(viewport).finish(),
-            Self::ResetPosition => write!(f, "ResetPosition"),
-            Self::CycleFilters => write!(f, "CycleFilters"),
-            Self::DragSplit { active } => {
-                f.debug_struct("DragSplit").field("active", active).finish()
-            }
-        }
-    }
+    /// Select the view directly
+    SetViewMode(ViewMode),
+    /// Cycle through view modes
+    CycleViewMode,
+    /// Show the next/previous loaded image
+    CycleImage {
+        /// Direction of the cycle
+        direction: CycleDirection,
+    },
 }
 
 impl ImageMessage {
     /// Create an image message given a specific key was pressed
-    pub fn from_key(key: &SmolStr, cursor: Option<na::Point2<f32>>) -> Option<Self> {
+    pub fn from_key(key: &Key, cursor: Option<na::Point2<f32>>) -> Option<Self> {
         let fix_point = cursor.unwrap_or_default();
-        match key.as_str() {
-            "1" => Some(Self::Viewport(ViewportMessage::SetZoom {
-                fix_point,
-                zoom: 1.,
-            })),
-            "2" => Some(Self::Viewport(ViewportMessage::SetZoom {
-                fix_point,
-                zoom: 2.,
-            })),
-            "9" => Some(Self::Viewport(ViewportMessage::SetZoom {
-                fix_point,
-                zoom: 0.5,
-            })),
-            "s" => Some(Self::ResetPosition),
-            "f" => Some(Self::CycleFilters),
-            "-" => Some(Self::Viewport(ViewportMessage::zoom_out(fix_point))),
-            "+" => Some(Self::Viewport(ViewportMessage::zoom_in(fix_point))),
-            _ => None,
-        }
+        #[expect(clippy::wildcard_enum_match_arm)]
+        let msg = match key {
+            Key::Character(char) => match char.as_str() {
+                "1" => Self::Viewport(ViewportMessage::SetZoom {
+                    fix_point,
+                    zoom: 1.,
+                }),
+                "2" => Self::Viewport(ViewportMessage::SetZoom {
+                    fix_point,
+                    zoom: 2.,
+                }),
+                "9" => Self::Viewport(ViewportMessage::SetZoom {
+                    fix_point,
+                    zoom: 0.5,
+                }),
+                "s" => Self::ResetPosition,
+                "f" => Self::CycleFilters,
+                "-" => Self::Viewport(ViewportMessage::zoom_out(fix_point)),
+                "+" => Self::Viewport(ViewportMessage::zoom_in(fix_point)),
+                _ => return None,
+            },
+            Key::Named(named) => match named {
+                NamedKey::ArrowLeft => Self::CycleImage {
+                    direction: CycleDirection::Prev,
+                },
+                NamedKey::ArrowRight => Self::CycleImage {
+                    direction: CycleDirection::Next,
+                },
+                _ => return None,
+            },
+            Key::Unidentified(_) | Key::Dead(_) => return None,
+        };
+        Some(msg)
     }
 }
 
 /// Image data in memory
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Image {
     /// The image's pixel data
     image: image::RgbaImage,
@@ -561,6 +698,14 @@ impl std::ops::Deref for Image {
 
     fn deref(&self) -> &Self::Target {
         &self.image
+    }
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let width = self.width();
+        let height = self.height();
+        f.write_str(&format!("Image({width}x{height})"))
     }
 }
 

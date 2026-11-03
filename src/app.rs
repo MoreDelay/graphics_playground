@@ -6,12 +6,12 @@ use std::time::Instant;
 use iced::Event;
 use iced::futures::executor::block_on;
 use iced_graphics::{Shell, Viewport};
-use iced_wgpu::core::SmolStr;
 use iced_wgpu::{Engine, Renderer, wgpu};
 use iced_winit::conversion::window_event;
 use iced_winit::core::{renderer, window};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::winit::event_loop::ControlFlow;
+use iced_winit::winit::keyboard::Key;
 use iced_winit::{Clipboard, winit};
 use nalgebra as na;
 use tracing::warn;
@@ -19,7 +19,6 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::error::EventLoopError;
 use winit::event::{ElementState, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::Key;
 use winit::window::WindowAttributes;
 
 use crate::controls::coords::Physical;
@@ -249,12 +248,12 @@ impl Ready {
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
-                        logical_key: Key::Character(ref symbol),
+                        ref logical_key,
                         state: ElementState::Pressed,
                         ..
                     },
                 ..
-            } => self.key_pressed(symbol.clone()),
+            } => self.key_pressed(logical_key.clone()),
             _ => Response::NoChange,
         };
         self.handle_response(response, event_loop);
@@ -468,7 +467,7 @@ impl Ready {
     }
 
     /// Handle when a keyboard button was pressed
-    fn key_pressed(&mut self, key: SmolStr) -> Response {
+    fn key_pressed(&mut self, key: Key) -> Response {
         let message = Message::KeyPress(key);
         self.controls
             .update(&self.gpu_ctx, &self.target_ctx, message)

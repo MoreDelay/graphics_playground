@@ -6,8 +6,9 @@ mod render;
 use std::path::Path;
 
 use derive_more::Display;
-use iced::wgpu;
-use iced_widget::combo_box;
+use iced::Length::Fill;
+use iced::{Alignment, wgpu};
+use iced_widget::{button, combo_box, container, text};
 use iced_winit::winit::dpi::PhysicalSize;
 use iced_winit::winit::keyboard::{Key, NamedKey};
 use nalgebra as na;
@@ -78,9 +79,6 @@ impl ImageWidget {
         &'a self,
         control: iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer>,
     ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
-        use iced::Length::Fill;
-        use iced_widget::{button, text};
-
         let view_ref = self
             .combo_box_view
             .options()
@@ -88,28 +86,32 @@ impl ImageWidget {
             .find(|&&m| m == self.view.as_mode())
             .expect("combo box has all modes as options");
 
-        let got_two = self.left.is_some() && self.right.is_some();
-        let single_view = self.view.as_mode() == ViewMode::Single;
-        let arrows_active = got_two && single_view;
+        let n_images = self.left.is_some() as u8 + self.right.is_some() as u8;
+        let got_two = n_images >= 2;
+        let (active_left, active_right) = if got_two && let ViewState::Single(index) = self.view {
+            (index > 0, index < n_images - 1)
+        } else {
+            (false, false)
+        };
 
         let arrows = iced_widget::row![
             button(text("<").center().width(Fill))
                 .width(Fill)
-                .on_press_maybe(arrows_active.then_some(Message::Image(
-                    ImageMessage::CycleImage {
+                .on_press_maybe(
+                    active_left.then_some(Message::Image(ImageMessage::CycleImage {
                         direction: CycleDirection::Prev
-                    }
-                ))),
+                    }))
+                ),
             button(text(">").center().width(Fill))
                 .width(Fill)
-                .on_press_maybe(arrows_active.then_some(Message::Image(
-                    ImageMessage::CycleImage {
+                .on_press_maybe(
+                    active_right.then_some(Message::Image(ImageMessage::CycleImage {
                         direction: CycleDirection::Next
-                    }
-                ))),
+                    }))
+                ),
         ];
 
-        control
+        let control = control
             .push(
                 button(text("Open Image").center().width(Fill))
                     .width(Fill)
@@ -135,18 +137,46 @@ impl ImageWidget {
                             zoom: 1.,
                         },
                     ))),
-            )
-            .push(iced::widget::space().height(5.))
-            .push(
-                combo_box(
-                    &self.combo_box_view,
-                    "Select view...",
-                    Some(view_ref),
-                    |selection| Message::Image(ImageMessage::SetViewMode(selection)),
+            );
+
+        let control = match got_two {
+            false => control,
+            true => control
+                .push(iced::widget::space().height(5.))
+                .push(
+                    combo_box(
+                        &self.combo_box_view,
+                        "Select view...",
+                        Some(view_ref),
+                        |selection| Message::Image(ImageMessage::SetViewMode(selection)),
+                    )
+                    .width(Fill),
                 )
+                .push(arrows),
+        };
+
+        self.push_bottom_text(control)
+    }
+
+    /// Add info text to the bottom of the control panel
+    fn push_bottom_text<'a>(
+        &'a self,
+        control: iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer>,
+    ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
+        control.push(
+            container(
+                text(format!(
+                    "Zoom: {:.3}\nFilter: {}",
+                    self.params.viewport.zoom(),
+                    self.params.filter
+                ))
+                .style(text::base)
+                .size(14)
+                .align_x(Alignment::Start)
                 .width(Fill),
             )
-            .push(arrows)
+            .align_bottom(Fill),
+        )
     }
 
     /// Get the latest rendering result

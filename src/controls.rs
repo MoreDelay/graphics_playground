@@ -8,7 +8,7 @@ use derive_more::Display;
 use iced::advanced::{Layout, Widget, layout, mouse, renderer, widget};
 use iced::{Event, Rectangle};
 use iced_wgpu::{Renderer, wgpu};
-use iced_widget::{button, column, combo_box, container, row, text};
+use iced_widget::{column, combo_box, container, row, text};
 use iced_winit::conversion::cursor_position;
 use iced_winit::core::{Color, Element, Theme};
 use iced_winit::winit::dpi::{LogicalInsets, LogicalSize, PhysicalInsets, PhysicalPosition};
@@ -18,7 +18,7 @@ use nalgebra as na;
 
 use crate::controls::coords::{LocalCoords, Physical};
 use crate::hello_triangle::HelloWidget;
-use crate::image::{ClampedSplit, CycleDirection, Image, ImageMessage, ImageWidget};
+use crate::image::{ClampedSplit, Image, ImageMessage, ImageWidget};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::physics::{PhysicsMessage, PhysicsWidget};
@@ -154,7 +154,6 @@ impl Controls {
     }
 
     /// Create the Iced view of the gui
-    #[expect(clippy::too_many_lines)]
     pub fn view(&self, scale_factor: f32) -> Element<'_, Message, Theme, Renderer> {
         use iced::Length::Fill;
 
@@ -207,71 +206,17 @@ impl Controls {
         .width(Self::PANEL_WIDTH as f32)
         .padding(5);
 
-        // TODO: make widgets define their widget-specific controls themselves
+        // push widget-specific controls to the control panel
         let control = match &self.widget {
             CurrentWidget::HelloTriangle(_) => control,
-            CurrentWidget::Image(image) => control
-                .push(iced::widget::space().height(5.))
-                .push(
-                    button(text("Open Image").center().width(Fill))
-                        .width(Fill)
-                        .on_press(Message::SelectFile),
-                )
-                .push(
-                    button(text("Toggle Filter").center().width(Fill))
-                        .padding(5.)
-                        .width(Fill)
-                        .on_press(Message::Image(ImageMessage::CycleFilters)),
-                )
-                .push(
-                    button(text("Reset Pos").center().width(Fill))
-                        .width(Fill)
-                        .on_press(Message::Image(ImageMessage::ResetPosition)),
-                )
-                .push(
-                    button(text("Reset Zoom").center().width(Fill))
-                        .width(Fill)
-                        .on_press(Message::Image(ImageMessage::Viewport(
-                            ViewportMessage::SetZoom {
-                                fix_point: na::Point2::origin(),
-                                zoom: 1.,
-                            },
-                        ))),
-                )
-                .push(iced::widget::space().height(5.))
-                .push(
-                    combo_box(
-                        image.combo_box_view(),
-                        "Select view...",
-                        Some(&image.view_selection()),
-                        |selection| Message::Image(ImageMessage::SetViewMode(selection)),
-                    )
-                    .width(Fill),
-                )
-                .push(
-                    button(text("Cycle View").center().width(Fill))
-                        .width(Fill)
-                        .on_press(Message::Image(ImageMessage::CycleViewMode)),
-                )
-                .push(
-                    button(text("Prev Image").center().width(Fill))
-                        .width(Fill)
-                        .on_press(Message::Image(ImageMessage::CycleImage {
-                            direction: CycleDirection::Prev,
-                        })),
-                )
-                .push(
-                    button(text("Next Image").center().width(Fill))
-                        .width(Fill)
-                        .on_press(Message::Image(ImageMessage::CycleImage {
-                            direction: CycleDirection::Next,
-                        })),
-                ),
-            CurrentWidget::Physics(_) => control.push(
-                button(text("Reset").center().width(Fill))
-                    .width(Fill)
-                    .on_press(Message::Physics(PhysicsMessage::Reset)),
-            ),
+            CurrentWidget::Image(widget) => {
+                let control = control.push(iced::widget::space().height(5.));
+                widget.push_controls(control)
+            }
+            CurrentWidget::Physics(widget) => {
+                let control = control.push(iced::widget::space().height(5.));
+                widget.push_controls(control)
+            }
         };
 
         row![control, placeholder].into()

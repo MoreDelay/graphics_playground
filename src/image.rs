@@ -12,7 +12,7 @@ use iced_winit::winit::dpi::PhysicalSize;
 use iced_winit::winit::keyboard::{Key, NamedKey};
 use nalgebra as na;
 
-use crate::controls::RenderContext;
+use crate::controls::{Message, RenderContext};
 use crate::image::filters::GaussFilter;
 use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
 use crate::instruments::GpuContext;
@@ -73,16 +73,80 @@ impl ImageWidget {
         }
     }
 
-    /// Get the current view selection
-    pub const fn view_selection(&self) -> ViewMode {
-        self.view.as_mode()
-    }
+    /// Push the control widgets into the control panel column
+    pub fn push_controls<'a>(
+        &'a self,
+        control: iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer>,
+    ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
+        use iced::Length::Fill;
+        use iced_widget::{button, text};
 
-    /// Get a reference to the view mode combobox
-    ///
-    /// TODO: should be replaced by a method that creates all image-controls itself
-    pub const fn combo_box_view(&self) -> &combo_box::State<ViewMode> {
-        &self.combo_box_view
+        let view_ref = self
+            .combo_box_view
+            .options()
+            .iter()
+            .find(|&&m| m == self.view.as_mode())
+            .expect("combo box has all modes as options");
+
+        let got_two = self.left.is_some() && self.right.is_some();
+        let single_view = self.view.as_mode() == ViewMode::Single;
+        let arrows_active = got_two && single_view;
+
+        let arrows = iced_widget::row![
+            button(text("<").center().width(Fill))
+                .width(Fill)
+                .on_press_maybe(arrows_active.then_some(Message::Image(
+                    ImageMessage::CycleImage {
+                        direction: CycleDirection::Prev
+                    }
+                ))),
+            button(text(">").center().width(Fill))
+                .width(Fill)
+                .on_press_maybe(arrows_active.then_some(Message::Image(
+                    ImageMessage::CycleImage {
+                        direction: CycleDirection::Next
+                    }
+                ))),
+        ];
+
+        control
+            .push(
+                button(text("Open Image").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::SelectFile),
+            )
+            .push(
+                button(text("Toggle Filter").center().width(Fill))
+                    .padding(5.)
+                    .width(Fill)
+                    .on_press(Message::Image(ImageMessage::CycleFilters)),
+            )
+            .push(
+                button(text("Reset Pos").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::Image(ImageMessage::ResetPosition)),
+            )
+            .push(
+                button(text("Reset Zoom").center().width(Fill))
+                    .width(Fill)
+                    .on_press(Message::Image(ImageMessage::Viewport(
+                        ViewportMessage::SetZoom {
+                            fix_point: na::Point2::origin(),
+                            zoom: 1.,
+                        },
+                    ))),
+            )
+            .push(iced::widget::space().height(5.))
+            .push(
+                combo_box(
+                    &self.combo_box_view,
+                    "Select view...",
+                    Some(view_ref),
+                    |selection| Message::Image(ImageMessage::SetViewMode(selection)),
+                )
+                .width(Fill),
+            )
+            .push(arrows)
     }
 
     /// Get the latest rendering result
@@ -375,10 +439,16 @@ impl ImageWidget {
             return;
         }
 
-        let next = u8::from(direction == CycleDirection::Next);
-        if next == index {
-            return;
-        }
+        // TODO: have more than two images loaded at once
+        let n_images = 2;
+        let n_images: u8 = n_images
+            .try_into()
+            .expect("using u8 as index, no more than 255 images");
+
+        let next = match direction {
+            CycleDirection::Next => index.wrapping_add(1) % n_images,
+            CycleDirection::Prev => index.checked_sub(1).unwrap_or(n_images - 1),
+        };
 
         self.view = ViewState::Single(next);
         // Only the final composition is out-of-date, the individual image outputs remain valid
@@ -576,6 +646,7 @@ impl ImageMessage {
                 }),
                 "s" => Self::ResetPosition,
                 "f" => Self::CycleFilters,
+                "v" => Self::CycleViewMode,
                 "-" => Self::Viewport(ViewportMessage::zoom_out(fix_point)),
                 "+" => Self::Viewport(ViewportMessage::zoom_in(fix_point)),
                 _ => return None,

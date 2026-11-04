@@ -6,7 +6,7 @@ use iced::wgpu;
 use iced_winit::winit::dpi::PhysicalSize;
 use nalgebra as na;
 
-use crate::controls::RenderContext;
+use crate::controls::{Message, RenderContext};
 use crate::geometry::{HalfSpace, Rectangle};
 use crate::instruments::bind::image::ViewportRaw;
 use crate::instruments::buffer::{
@@ -78,6 +78,22 @@ impl PhysicsWidget {
             viewport,
             last_tick: None,
         }
+    }
+
+    /// Push the control widgets into the control panel column
+    #[expect(clippy::unused_self)]
+    pub fn push_controls<'a>(
+        &'a self,
+        control: iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer>,
+    ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
+        use iced::Length::Fill;
+        use iced_widget::{button, text};
+
+        control.push(
+            button(text("Reset").center().width(Fill))
+                .width(Fill)
+                .on_press(Message::Physics(PhysicsMessage::Reset)),
+        )
     }
 
     /// Render the current state of objects

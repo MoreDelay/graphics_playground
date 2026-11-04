@@ -416,11 +416,14 @@ impl Controls {
 
     /// Handle mouse scrolling up
     fn scroll_up(&mut self) {
-        let cursor = self
+        let Some(cursor) = self
             .cursor
             .pos()
             .and_then(|cursor| self.viewport.coords().local_point(cursor))
-            .unwrap_or_default();
+        else {
+            return;
+        };
+
         let message = ViewportMessage::zoom_in(cursor);
 
         match &mut self.widget {
@@ -438,11 +441,14 @@ impl Controls {
 
     /// Handle mouse scrolling up
     fn scroll_down(&mut self) {
-        let cursor = self
+        let Some(cursor) = self
             .cursor
             .pos()
             .and_then(|cursor| self.viewport.coords().local_point(cursor))
-            .unwrap_or_default();
+        else {
+            return;
+        };
+
         let message = ViewportMessage::zoom_out(cursor);
 
         match &mut self.widget {

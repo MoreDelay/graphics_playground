@@ -29,10 +29,13 @@ pub struct ImageWidget {
     /// Current meta instruments used by all images
     meta: ImageMetaInstruments,
 
-    /// Instruments for the left image
-    left: Option<SingleImageState>,
-    /// Instruments for the right image
-    right: Option<SingleImageState>,
+    /// Instruments for images
+    #[expect(
+        clippy::vec_box,
+        reason = "Large struct needs to move around inside the vec on delete, etc."
+    )]
+    // TODO: add feature to remove image and change image order
+    images: Vec<Box<SingleImageState>>,
 
     /// The draw parameters used the last time
     params: DrawParameters,
@@ -55,8 +58,7 @@ impl ImageWidget {
 
         Self {
             meta: ImageMetaInstruments::new(),
-            left: None,
-            right: None,
+            images: Vec::new(),
             params,
             view: ViewState::default(),
             combo_box_view,
@@ -65,16 +67,18 @@ impl ImageWidget {
 
     /// Get the current image split position
     pub const fn split(&self) -> Option<ClampedSplit> {
-        let got_two = self.left.is_some() && self.right.is_some();
+        let got_two = self.images.len() >= 2;
         if got_two && let ViewState::Split(split) = self.view {
             let width = self.params.viewport.size().width as f32;
-            Some(split.clamped(width))
+            Some(split.movement.clamped(width))
         } else {
             None
         }
     }
 
     /// Push the control widgets into the control panel column
+    ///
+    /// TODO: add indicator what images are displayed
     pub fn push_controls<'a>(
         &'a self,
         control: iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer>,
@@ -86,7 +90,7 @@ impl ImageWidget {
             .find(|&&m| m == self.view.as_mode())
             .expect("combo box has all modes as options");
 
-        let n_images = self.left.is_some() as u8 + self.right.is_some() as u8;
+        let n_images: u8 = self.images.len().try_into().expect("at most 255 images");
         let got_two = n_images >= 2;
         let (active_left, active_right) = if got_two && let ViewState::Single(index) = self.view {
             (index > 0, index < n_images - 1)
@@ -189,12 +193,22 @@ impl ImageWidget {
 
         let params = self.params;
 
-        match self.params.filter {
-            ImageFilter::Nearest => self.nearest(context, &params),
-            ImageFilter::BiLinear => {
-                self.bilinear(context, &params);
+        for index in self.visible_indices() {
+            let image = &mut self.images[index as usize];
+            match self.params.filter {
+                ImageFilter::Nearest => {
+                    self.meta
+                        .nearest(&mut image.instruments, context, &image.data, &params);
+                }
+                ImageFilter::BiLinear => {
+                    self.meta
+                        .bilinear(&mut image.instruments, context, &image.data, &params);
+                }
+                ImageFilter::Lanczos => {
+                    self.meta
+                        .lanczos(&mut image.instruments, context, &image.data, &params);
+                }
             }
-            ImageFilter::Lanczos => self.lanczos(context, &params),
         }
 
         let RenderContext {
@@ -207,21 +221,30 @@ impl ImageWidget {
 
         let output = self.meta.create_output(ctx, passthru, viewport)?;
 
-        match (&self.left, &self.right, self.view) {
-            (None, _, _) => return None,
-            (Some(left), None, _) => {
-                let left = left.instruments.output()?;
-                passthru.full_draw(encoder, left, output.view());
+        match (&self.images[..], self.view) {
+            ([], _) => return None,
+            ([single], _) => {
+                let single = single.instruments.output()?;
+                passthru.full_draw(encoder, single, output.view());
             }
-            (Some(left), Some(right), ViewState::Single(index)) => {
-                let image = if index == 0 { left } else { right };
+            (many, ViewState::Nothing) => {
+                self.view = ViewState::Single(0);
+                let image = &many[0];
                 let image = image.instruments.output()?;
                 passthru.full_draw(encoder, image, output.view());
             }
-            (Some(left), Some(right), ViewState::Split(split)) => {
+            (many, ViewState::Single(index)) => {
+                let image = &many[index as usize];
+                let image = image.instruments.output()?;
+                passthru.full_draw(encoder, image, output.view());
+            }
+            (many, ViewState::Split(split)) => {
+                let left = &many[split.left as usize];
                 let left = left.instruments.output()?;
+                let right = &many[split.right as usize];
                 let right = right.instruments.output()?;
                 let width = params.viewport.size().width as f32;
+
                 draw_splitted(
                     passthru,
                     encoder,
@@ -229,7 +252,7 @@ impl ImageWidget {
                     left,
                     right,
                     output.view(),
-                    split.clamped(width),
+                    split.movement.clamped(width),
                 );
             }
         }
@@ -241,7 +264,7 @@ impl ImageWidget {
     /// Handle a message for the image widget
     pub fn update(&mut self, message: ImageMessage) {
         match message {
-            ImageMessage::SetImage(image) => self.set_image(image),
+            ImageMessage::SetImage(image) => self.add_image(image),
             ImageMessage::Viewport(message) => self.update_viewport(message),
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
@@ -252,66 +275,53 @@ impl ImageWidget {
         }
     }
 
-    /// Render with the "nearest" filter
-    fn nearest(&mut self, context: &mut RenderContext, params: &DrawParameters) {
-        if let Some(image) = &mut self.left {
-            self.meta
-                .nearest(&mut image.instruments, context, &image.data, params);
-        }
-
-        if let Some(image) = &mut self.right {
-            self.meta
-                .nearest(&mut image.instruments, context, &image.data, params);
-        }
-    }
-
-    /// Render with the "bilinear" filter
-    fn bilinear(&mut self, context: &mut RenderContext, params: &DrawParameters) {
-        if let Some(image) = &mut self.left {
-            self.meta
-                .bilinear(&mut image.instruments, context, &image.data, params);
-        }
-
-        if let Some(image) = &mut self.right {
-            self.meta
-                .bilinear(&mut image.instruments, context, &image.data, params);
-        }
-    }
-
-    /// Render with the "lanczos" filter
-    fn lanczos(&mut self, context: &mut RenderContext, params: &DrawParameters) {
-        if let Some(image) = &mut self.left {
-            self.meta
-                .lanczos(&mut image.instruments, context, &image.data, params);
-        }
-
-        if let Some(image) = &mut self.right {
-            self.meta
-                .lanczos(&mut image.instruments, context, &image.data, params);
+    /// Get a list of all indices that are currently shown
+    fn visible_indices(&self) -> Vec<u8> {
+        match self.view {
+            ViewState::Nothing => Vec::new(),
+            ViewState::Single(index) => vec![index],
+            ViewState::Split(split) => vec![split.left, split.right],
         }
     }
 
     /// Update the image
-    fn set_image(&mut self, image: Image) {
+    fn add_image(&mut self, image: Image) {
         self.meta.replaced_image();
-        if let Some(left) = &mut self.left {
-            left.instruments.replaced_image();
-        }
-        if let Some(right) = &mut self.right {
-            right.instruments.replaced_image();
-        }
 
-        std::mem::swap(&mut self.left, &mut self.right);
-        self.left = Some(SingleImageState::new(image));
+        self.images.push(Box::new(SingleImageState::new(image)));
+        let new_index: u8 = (self.images.len() - 1)
+            .try_into()
+            .expect("at most 255 images");
 
         // Reset viewing settings when new image was loaded
-        let split = Split::Set(ClampedSplit::Split(0.));
-        self.view = ViewState::Split(split);
+        let movement = SplitMovement::Set(ClampedSplit::Split(0.));
+        self.view = match self.view {
+            ViewState::Nothing => ViewState::Single(new_index),
+            ViewState::Single(index) => {
+                let split = Split {
+                    left: index,
+                    right: new_index,
+                    movement,
+                };
+                ViewState::Split(split)
+            }
+            ViewState::Split(split) => {
+                let split = Split {
+                    left: split.right,
+                    right: new_index,
+                    movement,
+                };
+                ViewState::Split(split)
+            }
+        };
 
-        let left = self.left.as_ref().map_or_default(|v| v.data.size());
-        let right = self.right.as_ref().map_or_default(|v| v.data.size());
-        let area = left.max(right).cast();
-        let area = na::Vector2::new(area.width, area.height);
+        let area = self
+            .visible_indices()
+            .into_iter()
+            .map(|index| self.images[index as usize].data.size())
+            .max()
+            .unwrap_or_default();
+        let area = na::Vector2::new(area.width, area.height).cast();
 
         self.params.viewport.resize_area(area);
     }
@@ -324,17 +334,14 @@ impl ImageWidget {
         }
 
         self.meta.resized();
-        if let Some(left) = &mut self.left {
-            left.instruments.resized();
-        }
-        if let Some(right) = &mut self.right {
-            right.instruments.resized();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.resized();
         }
 
         if let ViewState::Split(split) = &mut self.view
-            && let Split::Set(inner) = split
+            && let SplitMovement::Set(inner) = &mut split.movement
         {
-            *split = Split::Set(inner.clamped(size.width as f32));
+            *inner = inner.clamped(size.width as f32);
         }
     }
 
@@ -350,8 +357,8 @@ impl ImageWidget {
     /// Handle zoom in
     fn scale_zoom(&mut self, factor: f32, fix_point: na::Point2<f32>) {
         self.meta.zoomed();
-        for image in self.iter_images_mut() {
-            image.instruments.zoomed();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.zoomed();
         }
 
         self.params.viewport.scale_zoom(factor, fix_point);
@@ -360,8 +367,8 @@ impl ImageWidget {
     /// Handle zoom change
     fn set_zoom(&mut self, zoom: f32, fix_point: na::Point2<f32>) {
         self.meta.zoomed();
-        for image in self.iter_images_mut() {
-            image.instruments.zoomed();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.zoomed();
         }
 
         self.params.viewport.set_zoom(zoom, fix_point);
@@ -372,14 +379,22 @@ impl ImageWidget {
         self.meta.panned();
 
         match &mut self.view {
-            ViewState::Single(_) | ViewState::Split(Split::Set(_)) => {
-                for image in self.iter_images_mut() {
-                    image.instruments.panned();
+            ViewState::Nothing => (),
+            ViewState::Single(_)
+            | ViewState::Split(Split {
+                movement: SplitMovement::Set(_),
+                ..
+            }) => {
+                for index in self.visible_indices() {
+                    self.images[index as usize].instruments.panned();
                 }
 
                 self.params.viewport.pan(pan_vector);
             }
-            ViewState::Split(Split::Dragging(pos)) => {
+            ViewState::Split(Split {
+                movement: SplitMovement::Dragging(pos),
+                ..
+            }) => {
                 // only final image is out-of-date
                 *pos += pan_vector.x;
             }
@@ -389,11 +404,8 @@ impl ImageWidget {
     /// Reset the position of the images
     fn reset_pos(&mut self) {
         self.meta.panned();
-        if let Some(left) = &mut self.left {
-            left.instruments.panned();
-        }
-        if let Some(right) = &mut self.right {
-            right.instruments.panned();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.panned();
         }
 
         self.params.viewport.reset_position();
@@ -402,11 +414,8 @@ impl ImageWidget {
     /// Cycle to the next filter to be used when requesting a rendering
     fn cycle_filters(&mut self) {
         self.meta.cycled_filter();
-        if let Some(left) = &mut self.left {
-            left.instruments.cycled_filter();
-        }
-        if let Some(right) = &mut self.right {
-            right.instruments.cycled_filter();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.cycled_filter();
         }
 
         self.params.filter = match self.params.filter {
@@ -424,25 +433,37 @@ impl ImageWidget {
         };
 
         let width = self.params.viewport.size().width as f32;
-        *split = match active {
-            true => split.dragging(width),
-            false => Split::Set(split.clamped(width)),
+        split.movement = match active {
+            true => split.movement.dragging(width),
+            false => SplitMovement::Set(split.movement.clamped(width)),
         };
     }
 
     /// Set the view mode from a selection, preserving the current single-image index
-    fn set_view_mode(&mut self, selection: ViewMode) {
-        if self.view.as_mode() == selection {
+    fn set_view_mode(&mut self, mode: ViewMode) {
+        if self.view.as_mode() == mode {
             return;
         }
 
-        let next_view = match (selection, self.view) {
-            (ViewMode::Single, ViewState::Split(_)) => ViewState::Single(0),
-            (ViewMode::Split, ViewState::Single(_)) => ViewState::Split(Split::new()),
-            _ => return,
+        self.view = match self.images.len() {
+            0 => ViewState::Nothing,
+            1 => ViewState::Single(0),
+            n @ 2.. => match (mode, self.view) {
+                (ViewMode::Single, ViewState::Split(split)) => ViewState::Single(split.left),
+                (ViewMode::Split, ViewState::Single(left)) => {
+                    let n: u8 = n.try_into().expect("at most 255 images");
+                    let right = left.wrapping_add(1) % n;
+                    let split = Split {
+                        left,
+                        right,
+                        movement: SplitMovement::new(),
+                    };
+                    ViewState::Split(split)
+                }
+                _ => return,
+            },
         };
 
-        self.view = next_view;
         // Only the final composition is out-of-date, the individual image outputs remain valid
         self.meta.panned();
     }
@@ -450,12 +471,13 @@ impl ImageWidget {
     /// Cycle to the next view mode
     fn cycle_view_mode(&mut self) {
         // Entering single mode always shows the newest image first
-        self.view = match self.view {
-            ViewState::Single(_) => ViewState::Split(Split::new()),
-            ViewState::Split(_) => ViewState::Single(0),
+        let mode = match self.view {
+            ViewState::Nothing => return,
+            ViewState::Single(_) => ViewMode::Split,
+            ViewState::Split(_) => ViewMode::Single,
         };
-        // Only the final composition is out-of-date, the individual image outputs remain valid
-        self.meta.panned();
+
+        self.set_view_mode(mode);
     }
 
     /// Show the next or previous loaded image
@@ -465,37 +487,38 @@ impl ImageWidget {
         let ViewState::Single(index) = self.view else {
             return;
         };
-        if self.left.is_none() || self.right.is_none() {
-            return;
-        }
 
-        // TODO: have more than two images loaded at once
-        let n_images = 2;
-        let n_images: u8 = n_images
-            .try_into()
-            .expect("using u8 as index, no more than 255 images");
-
-        let next = match direction {
-            CycleDirection::Next => index.wrapping_add(1) % n_images,
-            CycleDirection::Prev => index.checked_sub(1).unwrap_or(n_images - 1),
+        let index = match direction {
+            CycleDirection::Next => index.checked_add(1),
+            CycleDirection::Prev => index.checked_sub(1),
         };
+        let Some(index) = index else { return };
 
-        self.view = ViewState::Single(next);
+        let n_images: u8 = self.images.len().try_into().expect("at most 255 images");
+        let index = index.clamp(0, n_images - 1);
+
+        self.view = ViewState::Single(index);
         // Only the final composition is out-of-date, the individual image outputs remain valid
         self.meta.panned();
     }
-
-    /// Iterate over the state of all loaded images
-    fn iter_images_mut(&mut self) -> impl IntoIterator<Item = &mut SingleImageState> {
-        [self.left.as_mut(), self.right.as_mut()]
-            .into_iter()
-            .flatten()
-    }
 }
 
-/// State of the image split
+/// State on the split view
+///
+/// TODO: add feature to select what image is shown on left/right, and make them swap sides
 #[derive(Debug, Clone, Copy)]
-enum Split {
+struct Split {
+    /// Index of the left image
+    left: u8,
+    /// Index of the right image
+    right: u8,
+    /// State about the image splitter position
+    movement: SplitMovement,
+}
+
+/// State of the image splitter
+#[derive(Debug, Clone, Copy)]
+enum SplitMovement {
     /// Actively dragging right now
     ///
     /// The split position can be outside the bounds of the viewport
@@ -504,7 +527,7 @@ enum Split {
     Set(ClampedSplit),
 }
 
-impl Split {
+impl SplitMovement {
     /// Create the default [`Split`]
     const fn new() -> Self {
         Self::Set(ClampedSplit::Split(0.))
@@ -529,7 +552,7 @@ impl Split {
     }
 }
 
-impl Default for Split {
+impl Default for SplitMovement {
     fn default() -> Self {
         Self::new()
     }
@@ -581,8 +604,11 @@ impl SingleImageState {
 }
 
 /// How the loaded images are displayed
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 enum ViewState {
+    /// No image is displayed
+    #[default]
+    Nothing,
     /// Show one image at a time; the payload is the index of the shown image
     Single(u8),
     /// Show both images side by side, split by the split bar
@@ -590,23 +616,13 @@ enum ViewState {
 }
 
 impl ViewState {
-    /// Create the default [`ViewMode`]
-    const fn new() -> Self {
-        Self::Single(0)
-    }
-
     /// The [`ViewMode`] corresponding to the current state
     const fn as_mode(self) -> ViewMode {
         match self {
+            Self::Nothing => ViewMode::Single,
             Self::Single(_) => ViewMode::Single,
             Self::Split(_) => ViewMode::Split,
         }
-    }
-}
-
-impl Default for ViewState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

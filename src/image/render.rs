@@ -823,14 +823,6 @@ impl ImageDataInstruments {
         Some(output)
     }
 
-    /// Degrade necessary instruments to handle a replaced image
-    pub fn replaced_image(&mut self) {
-        self.original.degrade();
-        self.output.degrade();
-        self.blurred.degrade();
-        self.storage_data.degrade();
-    }
-
     /// Degrade necessary instruments to handle a resized viewport
     pub fn resized(&mut self) {
         self.output.discard();

@@ -260,10 +260,8 @@ impl Ready {
 
         // Map window event to iced event
         let scale_factor = self.target_ctx.window.scale_factor() as f32;
-        {
-            if let Some(event) = window_event(event, scale_factor, self.controls.modifiers()) {
-                self.events.push(event);
-            }
+        if let Some(event) = window_event(event, scale_factor, self.controls.modifiers()) {
+            self.events.push(event);
         }
 
         // If there are events pending

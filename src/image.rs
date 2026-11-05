@@ -177,15 +177,11 @@ impl ImageWidget {
     ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
         control.push(
             container(
-                text(format!(
-                    "Zoom: {:.3}\nFilter: {}",
-                    self.params.viewport.zoom(),
-                    self.params.filter
-                ))
-                .style(text::base)
-                .size(14)
-                .align_x(Alignment::Start)
-                .width(Fill),
+                text(format!("Zoom: {:.3}", self.params.viewport.zoom()))
+                    .style(text::base)
+                    .size(14)
+                    .align_x(Alignment::Start)
+                    .width(Fill),
             )
             .align_bottom(Fill),
         )

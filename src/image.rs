@@ -307,8 +307,6 @@ impl ImageWidget {
 
     /// Update the image
     fn add_image(&mut self, image: Image) {
-        self.meta.replaced_image();
-
         self.images.push(Box::new(SingleImageState::new(image)));
         let new_index: u8 = (self.images.len() - 1)
             .try_into()
@@ -345,6 +343,12 @@ impl ImageWidget {
         let area = na::Vector2::new(area.width, area.height).cast();
 
         self.params.viewport.resize_area(area);
+
+        // reset position of visible images
+        self.meta.replaced_image();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.zoomed();
+        }
     }
 
     /// Update the viewport size

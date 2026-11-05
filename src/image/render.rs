@@ -754,6 +754,7 @@ impl ImageMetaInstruments {
     /// Degrade necessary instruments to handle a replaced image
     pub fn replaced_image(&mut self) {
         self.final_output.degrade();
+        self.viewport_buffer.degrade();
     }
 
     /// Degrade necessary instruments to handle a resized viewport

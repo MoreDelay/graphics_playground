@@ -423,7 +423,6 @@ impl ImageWidget {
             ImageFilter::BiLinear => ImageFilter::Lanczos,
             ImageFilter::Lanczos => ImageFilter::Nearest,
         };
-        println!("Filter: {:?}", self.params.filter);
     }
 
     /// Update whether the split is being dragged

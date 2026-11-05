@@ -1,7 +1,6 @@
 //! Contains the app controller
 
 use std::cell::Cell;
-use std::path::PathBuf;
 use std::time::Instant;
 
 use derive_more::Display;
@@ -18,7 +17,7 @@ use nalgebra as na;
 
 use crate::controls::coords::{LocalCoords, Physical};
 use crate::hello_triangle::HelloWidget;
-use crate::image::{ClampedSplit, Image, ImageMessage, ImageWidget};
+use crate::image::{ClampedSplit, ImageMessage, ImageWidget};
 use crate::instruments::pipeline::passthru::PassThruPipeline;
 use crate::instruments::{GpuContext, TargetContext};
 use crate::physics::{PhysicsMessage, PhysicsWidget};
@@ -260,19 +259,9 @@ impl Controls {
             (_, Message::KeyPress(key)) => return self.key_pressed(&key),
             (_, Message::Poll) => return self.got_polled(),
 
-            (CurrentWidget::HelloTriangle(_), Message::SelectFile) => (),
+            (CurrentWidget::HelloTriangle(_), _) => (),
 
-            (CurrentWidget::Image(widget), Message::SelectFile) => {
-                let image = Self::pick_image_dialog().and_then(|path| {
-                    Image::load(&path)
-                        .inspect_err(|e| eprintln!("Could not load image: {e}"))
-                        .ok()
-                });
-                if let Some(image) = image {
-                    let msg = ImageMessage::SetImage(image);
-                    widget.update(msg);
-                }
-            }
+            (CurrentWidget::Image(widget), Message::SelectFile) => widget.pick_files(),
             (CurrentWidget::Image(widget), Message::Image(msg)) => widget.update(msg),
             (_, Message::Image(..)) => (),
             (CurrentWidget::Physics(widget), Message::Physics(msg)) => widget.update(msg),
@@ -348,14 +337,6 @@ impl Controls {
             .draw(&self.passthru, &mut encoder, output, view);
 
         ctx.queue.submit([encoder.finish()]);
-    }
-
-    /// Let the user select an image file
-    fn pick_image_dialog() -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title("Pick image to display")
-            .add_filter("image", &["jpg", "jpeg", "png", "avif", "webp", "jxl"])
-            .pick_file()
     }
 
     /// Handle a keyboard button press

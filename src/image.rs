@@ -65,6 +65,28 @@ impl ImageWidget {
         }
     }
 
+    /// Let user select new image files to load
+    pub fn pick_files(&mut self) {
+        let images = rfd::FileDialog::new()
+            .set_title("Pick image to display")
+            .add_filter("image", &["jpg", "jpeg", "png", "avif", "webp", "jxl"])
+            .pick_files();
+        let Some(images) = images else {
+            return;
+        };
+
+        for image in images {
+            let image = match Image::load(&image) {
+                Ok(image) => image,
+                Err(e) => {
+                    eprintln!("Could not load image: {e}");
+                    continue;
+                }
+            };
+            self.add_image(image);
+        }
+    }
+
     /// Get the current image split position
     pub const fn split(&self) -> Option<ClampedSplit> {
         let got_two = self.images.len() >= 2;
@@ -264,7 +286,6 @@ impl ImageWidget {
     /// Handle a message for the image widget
     pub fn update(&mut self, message: ImageMessage) {
         match message {
-            ImageMessage::SetImage(image) => self.add_image(image),
             ImageMessage::Viewport(message) => self.update_viewport(message),
             ImageMessage::ResetPosition => self.reset_pos(),
             ImageMessage::CycleFilters => self.cycle_filters(),
@@ -644,10 +665,8 @@ pub enum CycleDirection {
 }
 
 /// The messages to update the image widget state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ImageMessage {
-    /// Display a new image
-    SetImage(Image),
     /// Message for moving the contents of the viewport
     Viewport(ViewportMessage),
     /// Reset the image position in the viewport

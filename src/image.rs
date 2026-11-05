@@ -518,8 +518,12 @@ impl ImageWidget {
         let index = index.clamp(0, n_images - 1);
 
         self.view = ViewState::Single(index);
-        // Only the final composition is out-of-date, the individual image outputs remain valid
+
+        // Images may have been panned between switches
         self.meta.panned();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.panned();
+        }
     }
 }
 

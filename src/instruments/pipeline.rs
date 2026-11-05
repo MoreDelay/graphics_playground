@@ -28,6 +28,14 @@ pub enum ImageFilter {
 }
 
 impl ImageFilter {
+    /// All filter types used actively by the app
+    pub const ALL: [Self; 4] = [
+        Self::Nearest,
+        Self::BiLinear,
+        Self::Lanczos(TWO),
+        Self::Lanczos(THREE),
+    ];
+
     /// Get the filter type of this image filter
     pub const fn as_type(self) -> ImageFilterType {
         match self {

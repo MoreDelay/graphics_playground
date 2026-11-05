@@ -8,7 +8,7 @@ use std::path::Path;
 use derive_more::Display;
 use iced::Length::Fill;
 use iced::{Alignment, wgpu};
-use iced_widget::{button, combo_box, container, text};
+use iced_widget::{button, container, pick_list, text};
 use iced_winit::winit::dpi::PhysicalSize;
 use iced_winit::winit::keyboard::{Key, NamedKey};
 use nalgebra as na;
@@ -20,7 +20,7 @@ use crate::instruments::GpuContext;
 use crate::instruments::bind::image::LanczosInfoRaw;
 use crate::instruments::mipmap::MipMapper;
 use crate::instruments::pipeline::passthru::PassThruTexture;
-use crate::instruments::pipeline::{ImageFilter, ImageFilterType, THREE, TWO};
+use crate::instruments::pipeline::{ImageFilter, ImageFilterType};
 use crate::instruments::splitview::draw_splitted;
 use crate::viewport::{ScrollableViewportState, ViewportMessage};
 
@@ -41,8 +41,6 @@ pub struct ImageWidget {
     params: DrawParameters,
     /// The current display mode
     view: ViewState,
-    /// Combo box state for the image view mode selection
-    combo_box_view: combo_box::State<ViewMode>,
 }
 
 impl ImageWidget {
@@ -54,14 +52,12 @@ impl ImageWidget {
             viewport: ScrollableViewportState::new(area, view, 1.),
             filter: ImageFilter::default(),
         };
-        let combo_box_view = combo_box::State::new(vec![ViewMode::Single, ViewMode::Split]);
 
         Self {
             meta: ImageMetaInstruments::new(),
             images: Vec::new(),
             params,
             view: ViewState::default(),
-            combo_box_view,
         }
     }
 
@@ -105,13 +101,6 @@ impl ImageWidget {
         &'a self,
         control: iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer>,
     ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
-        let view_ref = self
-            .combo_box_view
-            .options()
-            .iter()
-            .find(|&&m| m == self.view.as_mode())
-            .expect("combo box has all modes as options");
-
         let n_images: u8 = self.images.len().try_into().expect("at most 255 images");
         let got_two = n_images >= 2;
         let (active_left, active_right) = if got_two && let ViewState::Single(index) = self.view {
@@ -144,10 +133,10 @@ impl ImageWidget {
                     .on_press(Message::SelectFile),
             )
             .push(
-                button(text("Toggle Filter").center().width(Fill))
-                    .padding(5.)
-                    .width(Fill)
-                    .on_press(Message::Image(ImageMessage::CycleFilters)),
+                pick_list(ImageFilter::ALL, Some(self.params.filter), |f| {
+                    Message::Image(ImageMessage::SetFilter(f))
+                })
+                .width(Fill),
             )
             .push(
                 button(text("Reset Pos").center().width(Fill))
@@ -170,12 +159,9 @@ impl ImageWidget {
             true => control
                 .push(iced::widget::space().height(5.))
                 .push(
-                    combo_box(
-                        &self.combo_box_view,
-                        "Select view...",
-                        Some(view_ref),
-                        |selection| Message::Image(ImageMessage::SetViewMode(selection)),
-                    )
+                    pick_list(ViewMode::ALL, Some(self.view.as_mode()), |s| {
+                        Message::Image(ImageMessage::SetViewMode(s))
+                    })
                     .width(Fill),
                 )
                 .push(arrows),
@@ -288,6 +274,7 @@ impl ImageWidget {
         match message {
             ImageMessage::Viewport(message) => self.update_viewport(message),
             ImageMessage::ResetPosition => self.reset_pos(),
+            ImageMessage::SetFilter(filter) => self.set_filter(filter),
             ImageMessage::CycleFilters => self.cycle_filters(),
             ImageMessage::DragSplit { active } => self.drag_split(active),
             ImageMessage::SetViewMode(selection) => self.set_view_mode(selection),
@@ -436,19 +423,26 @@ impl ImageWidget {
         self.params.viewport.reset_position();
     }
 
-    /// Cycle to the next filter to be used when requesting a rendering
-    fn cycle_filters(&mut self) {
+    /// Set the next filter to be used when requesting a rendering
+    fn set_filter(&mut self, filter: ImageFilter) {
         self.meta.cycled_filter();
         for index in self.visible_indices() {
             self.images[index as usize].instruments.cycled_filter();
         }
 
-        self.params.filter = match self.params.filter {
-            ImageFilter::Nearest => ImageFilter::BiLinear,
-            ImageFilter::BiLinear => ImageFilter::Lanczos(TWO),
-            ImageFilter::Lanczos(TWO) => ImageFilter::Lanczos(THREE),
-            ImageFilter::Lanczos(_) => ImageFilter::Nearest,
-        };
+        self.params.filter = filter;
+    }
+
+    /// Cycle to the next filter to be used when requesting a rendering
+    fn cycle_filters(&mut self) {
+        let index = ImageFilter::ALL
+            .iter()
+            .enumerate()
+            .find_map(|(i, f)| (*f == self.params.filter).then_some(i))
+            .expect("combo box has all options");
+        let index = (index + 1) % ImageFilter::ALL.len();
+        let filter = ImageFilter::ALL[index];
+        self.set_filter(filter);
     }
 
     /// Update whether the split is being dragged
@@ -664,6 +658,11 @@ pub enum ViewMode {
     Split,
 }
 
+impl ViewMode {
+    /// All view modes in an array
+    pub const ALL: [Self; 2] = [Self::Single, Self::Split];
+}
+
 /// Direction to cycle between loaded images
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq)]
 pub enum CycleDirection {
@@ -680,6 +679,8 @@ pub enum ImageMessage {
     Viewport(ViewportMessage),
     /// Reset the image position in the viewport
     ResetPosition,
+    /// Set image filter to this
+    SetFilter(ImageFilter),
     /// Cycle through the filters used for rendering
     CycleFilters,
     /// Start dragging the image split

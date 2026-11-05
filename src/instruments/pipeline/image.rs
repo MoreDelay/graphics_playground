@@ -13,7 +13,7 @@ use crate::instruments::buffer::{
 use crate::instruments::mesh::InstanceBuffer;
 use crate::instruments::mesh::primitives::{InstanceRaw, VertexRaw};
 use crate::instruments::mesh::quad::QuadMesh;
-use crate::instruments::pipeline::ImageFilter;
+use crate::instruments::pipeline::ImageFilterType;
 use crate::instruments::{GpuContext, SHADER_ROOT};
 
 /// Image viewer vertex shader path
@@ -35,7 +35,7 @@ impl RenderNearestPipeline {
             ctx,
             pipeline_layout,
             output_format,
-            ImageFilter::Nearest,
+            ImageFilterType::Nearest,
             Some("Nearest Vertex Module"),
             Some("Nearest Fragment Module"),
             Some("Nearest Render Pipeline"),
@@ -79,7 +79,7 @@ impl RenderBilinearPipeline {
             ctx,
             pipeline_layout,
             output_format,
-            ImageFilter::BiLinear,
+            ImageFilterType::BiLinear,
             Some("Bilinear Vertex Module"),
             Some("Bilinear Fragment Module"),
             Some("Bilinear Render Pipeline"),
@@ -123,7 +123,7 @@ impl RenderLanczosPipeline {
             ctx,
             pipeline_layout,
             output_format,
-            ImageFilter::Lanczos,
+            ImageFilterType::Lanczos,
             Some("Lanczos Vertex Module"),
             Some("Lanczos Fragment Module"),
             Some("Lanczos Render Pipeline"),
@@ -163,7 +163,7 @@ fn image_pipeline(
     ctx: &GpuContext,
     pipeline_layout: &wgpu::PipelineLayout,
     output_format: wgpu::TextureFormat,
-    filter: ImageFilter,
+    filter: ImageFilterType,
     label_vertex: Option<&str>,
     label_fragment: Option<&str>,
     label_pipeline: Option<&str>,
@@ -173,9 +173,9 @@ fn image_pipeline(
     let vs_module = ctx.device.create_shader_module(vs_module);
 
     let filter = match filter {
-        ImageFilter::Nearest => "FILTER_NEAREST",
-        ImageFilter::BiLinear => "FILTER_BILINEAR",
-        ImageFilter::Lanczos => "FILTER_LANCZOS",
+        ImageFilterType::Nearest => "FILTER_NEAREST",
+        ImageFilterType::BiLinear => "FILTER_BILINEAR",
+        ImageFilterType::Lanczos => "FILTER_LANCZOS",
     };
     let fs_features = [(filter, true)];
 

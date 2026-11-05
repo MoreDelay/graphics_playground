@@ -19,8 +19,8 @@ use crate::image::render::{ImageDataInstruments, ImageMetaInstruments};
 use crate::instruments::GpuContext;
 use crate::instruments::bind::image::LanczosInfoRaw;
 use crate::instruments::mipmap::MipMapper;
-use crate::instruments::pipeline::ImageFilter;
 use crate::instruments::pipeline::passthru::PassThruTexture;
+use crate::instruments::pipeline::{ImageFilter, ImageFilterType, THREE, TWO};
 use crate::instruments::splitview::draw_splitted;
 use crate::viewport::{ScrollableViewportState, ViewportMessage};
 
@@ -217,16 +217,16 @@ impl ImageWidget {
 
         for index in self.visible_indices() {
             let image = &mut self.images[index as usize];
-            match self.params.filter {
-                ImageFilter::Nearest => {
+            match self.params.filter.as_type() {
+                ImageFilterType::Nearest => {
                     self.meta
                         .nearest(&mut image.instruments, context, &image.data, &params);
                 }
-                ImageFilter::BiLinear => {
+                ImageFilterType::BiLinear => {
                     self.meta
                         .bilinear(&mut image.instruments, context, &image.data, &params);
                 }
-                ImageFilter::Lanczos => {
+                ImageFilterType::Lanczos => {
                     self.meta
                         .lanczos(&mut image.instruments, context, &image.data, &params);
                 }
@@ -441,8 +441,9 @@ impl ImageWidget {
 
         self.params.filter = match self.params.filter {
             ImageFilter::Nearest => ImageFilter::BiLinear,
-            ImageFilter::BiLinear => ImageFilter::Lanczos,
-            ImageFilter::Lanczos => ImageFilter::Nearest,
+            ImageFilter::BiLinear => ImageFilter::Lanczos(TWO),
+            ImageFilter::Lanczos(TWO) => ImageFilter::Lanczos(THREE),
+            ImageFilter::Lanczos(_) => ImageFilter::Nearest,
         };
     }
 
@@ -862,9 +863,12 @@ struct DrawParameters {
 
 impl DrawParameters {
     /// Create the [`LanczosInfoRaw`] corresponding to the current parameters
-    #[expect(clippy::unused_self)]
     const fn raw_lanczos(&self) -> LanczosInfoRaw {
-        LanczosInfoRaw { filter_size: 2. }
+        let filter_size = match self.filter {
+            ImageFilter::Nearest | ImageFilter::BiLinear => 2.,
+            ImageFilter::Lanczos(lobes) => lobes.get() as f32,
+        };
+        LanczosInfoRaw { filter_size }
     }
 
     /// Create the blur kernel required for the current draw parameters

@@ -31,12 +31,7 @@ pub struct ImageWidget {
     meta: ImageMetaInstruments,
 
     /// Instruments for images
-    #[expect(
-        clippy::vec_box,
-        reason = "Large struct needs to move around inside the vec on delete, etc."
-    )]
-    // TODO: add feature to remove image and change image order
-    images: Vec<Box<SingleImageState>>,
+    images: Vec<SingleImageState>,
 
     /// Helper datastructure for the image picklist
     image_names: Vec<ImageName>,
@@ -325,7 +320,7 @@ impl ImageWidget {
     /// Update the image
     fn add_image(&mut self, image: Image) {
         let name = image.name.clone();
-        self.images.push(Box::new(SingleImageState::new(image)));
+        self.images.push(SingleImageState::new(image));
         let index: u8 = (self.images.len() - 1)
             .try_into()
             .expect("at most 255 images");

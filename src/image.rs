@@ -3,6 +3,7 @@
 pub mod filters;
 mod render;
 
+use std::ops::Not as _;
 use std::path::Path;
 
 use derive_more::Display;
@@ -37,10 +38,28 @@ pub struct ImageWidget {
     // TODO: add feature to remove image and change image order
     images: Vec<Box<SingleImageState>>,
 
+    /// Helper datastructure for the image picklist
+    image_names: Vec<ImageName>,
+
     /// The draw parameters used the last time
     params: DrawParameters,
     /// The current display mode
     view: ViewState,
+}
+
+/// Helper struct to associate a name to an index directly
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImageName {
+    /// Name of an image
+    name: String,
+    /// Index of that image
+    index: u8,
+}
+
+impl std::fmt::Display for ImageName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.fmt(f)
+    }
 }
 
 impl ImageWidget {
@@ -56,6 +75,7 @@ impl ImageWidget {
         Self {
             meta: ImageMetaInstruments::new(),
             images: Vec::new(),
+            image_names: Vec::new(),
             params,
             view: ViewState::default(),
         }
@@ -103,28 +123,6 @@ impl ImageWidget {
     ) -> iced_widget::Column<'a, Message, iced::Theme, iced_wgpu::Renderer> {
         let n_images: u8 = self.images.len().try_into().expect("at most 255 images");
         let got_two = n_images >= 2;
-        let (active_left, active_right) = if got_two && let ViewState::Single(index) = self.view {
-            (index > 0, index < n_images - 1)
-        } else {
-            (false, false)
-        };
-
-        let arrows = iced_widget::row![
-            button(text("<").center().width(Fill))
-                .width(Fill)
-                .on_press_maybe(
-                    active_left.then_some(Message::Image(ImageMessage::CycleImage {
-                        direction: CycleDirection::Prev
-                    }))
-                ),
-            button(text(">").center().width(Fill))
-                .width(Fill)
-                .on_press_maybe(
-                    active_right.then_some(Message::Image(ImageMessage::CycleImage {
-                        direction: CycleDirection::Next
-                    }))
-                ),
-        ];
 
         let control = control
             .push(
@@ -154,6 +152,19 @@ impl ImageWidget {
                     ))),
             );
 
+        let same_image = match self.view {
+            ViewState::Nothing => true,
+            ViewState::Single(left, right) => right.is_some_and(|right| left == right),
+            ViewState::Split(Split { left, right, .. }) => left == right,
+        };
+
+        let shown = match self.view {
+            ViewState::Nothing => None,
+            ViewState::Single(index, _) => Some(index),
+            ViewState::Split(Split { left, .. }) => Some(left),
+        };
+        let shown = shown.map(|index| &self.image_names[index as usize]);
+
         let control = match got_two {
             false => control,
             true => control
@@ -164,7 +175,28 @@ impl ImageWidget {
                     })
                     .width(Fill),
                 )
-                .push(arrows),
+                .push(
+                    button(text(">").center().width(Fill))
+                        .width(Fill)
+                        .on_press_maybe(
+                            same_image
+                                .not()
+                                .then_some(Message::Image(ImageMessage::SetRightImage)),
+                        ),
+                )
+                .push(
+                    pick_list(self.image_names.as_slice(), shown, |select| {
+                        let select = select.index;
+                        let index = self
+                            .image_names
+                            .iter()
+                            .map(|m| m.index)
+                            .find(|m| select == *m)
+                            .expect("selection comes from the list");
+                        Message::Image(ImageMessage::SetImage(index))
+                    })
+                    .width(Fill),
+                ),
         };
 
         self.push_bottom_text(control)
@@ -225,19 +257,19 @@ impl ImageWidget {
 
         let output = self.meta.create_output(ctx, passthru, viewport)?;
 
-        match (&self.images[..], self.view) {
+        match (self.images.as_slice(), self.view) {
             ([], _) => return None,
             ([single], _) => {
                 let single = single.instruments.output()?;
                 passthru.full_draw(encoder, single, output.view());
             }
             (many, ViewState::Nothing) => {
-                self.view = ViewState::Single(0);
+                self.view = ViewState::Single(0, None);
                 let image = &many[0];
                 let image = image.instruments.output()?;
                 passthru.full_draw(encoder, image, output.view());
             }
-            (many, ViewState::Single(index)) => {
+            (many, ViewState::Single(index, _)) => {
                 let image = &many[index as usize];
                 let image = image.instruments.output()?;
                 passthru.full_draw(encoder, image, output.view());
@@ -276,6 +308,8 @@ impl ImageWidget {
             ImageMessage::SetViewMode(selection) => self.set_view_mode(selection),
             ImageMessage::CycleViewMode => self.cycle_view_mode(),
             ImageMessage::CycleImage { direction } => self.cycle_image(direction),
+            ImageMessage::SetImage(index) => self.set_image(index),
+            ImageMessage::SetRightImage => self.set_right_image(),
         }
     }
 
@@ -283,34 +317,38 @@ impl ImageWidget {
     fn visible_indices(&self) -> Vec<u8> {
         match self.view {
             ViewState::Nothing => Vec::new(),
-            ViewState::Single(index) => vec![index],
+            ViewState::Single(index, _) => vec![index],
             ViewState::Split(split) => vec![split.left, split.right],
         }
     }
 
     /// Update the image
     fn add_image(&mut self, image: Image) {
+        let name = image.name.clone();
         self.images.push(Box::new(SingleImageState::new(image)));
-        let new_index: u8 = (self.images.len() - 1)
+        let index: u8 = (self.images.len() - 1)
             .try_into()
             .expect("at most 255 images");
+
+        let name = ImageName { name, index };
+        self.image_names.push(name);
 
         // Reset viewing settings when new image was loaded
         let movement = SplitMovement::Set(ClampedSplit::Split(0.));
         self.view = match self.view {
-            ViewState::Nothing => ViewState::Single(new_index),
-            ViewState::Single(index) => {
+            ViewState::Nothing => ViewState::Single(index, None),
+            ViewState::Single(_, right) => {
                 let split = Split {
                     left: index,
-                    right: new_index,
+                    right: right.unwrap_or_default(),
                     movement,
                 };
                 ViewState::Split(split)
             }
             ViewState::Split(split) => {
                 let split = Split {
-                    left: split.right,
-                    right: new_index,
+                    left: index,
+                    right: split.right,
                     movement,
                 };
                 ViewState::Split(split)
@@ -388,7 +426,7 @@ impl ImageWidget {
 
         match &mut self.view {
             ViewState::Nothing => (),
-            ViewState::Single(_)
+            ViewState::Single(..)
             | ViewState::Split(Split {
                 movement: SplitMovement::Set(_),
                 ..
@@ -462,15 +500,15 @@ impl ImageWidget {
 
         self.view = match self.images.len() {
             0 => ViewState::Nothing,
-            1 => ViewState::Single(0),
-            n @ 2.. => match (mode, self.view) {
-                (ViewMode::Single, ViewState::Split(split)) => ViewState::Single(split.left),
-                (ViewMode::Split, ViewState::Single(left)) => {
-                    let n: u8 = n.try_into().expect("at most 255 images");
-                    let right = left.wrapping_add(1) % n;
+            1 => ViewState::Single(0, None),
+            2.. => match (mode, self.view) {
+                (ViewMode::Single, ViewState::Split(split)) => {
+                    ViewState::Single(split.left, Some(split.right))
+                }
+                (ViewMode::Split, ViewState::Single(left, right)) => {
                     let split = Split {
                         left,
-                        right,
+                        right: right.unwrap_or_default(),
                         movement: SplitMovement::new(),
                     };
                     ViewState::Split(split)
@@ -488,7 +526,7 @@ impl ImageWidget {
         // Entering single mode always shows the newest image first
         let mode = match self.view {
             ViewState::Nothing => return,
-            ViewState::Single(_) => ViewMode::Split,
+            ViewState::Single(..) => ViewMode::Split,
             ViewState::Split(_) => ViewMode::Single,
         };
 
@@ -499,7 +537,7 @@ impl ImageWidget {
     ///
     /// Only applies in [`ViewMode::Single`] mode with two images loaded.
     fn cycle_image(&mut self, direction: CycleDirection) {
-        let ViewState::Single(index) = self.view else {
+        let ViewState::Single(index, right) = self.view else {
             return;
         };
 
@@ -512,12 +550,48 @@ impl ImageWidget {
         let n_images: u8 = self.images.len().try_into().expect("at most 255 images");
         let index = index.clamp(0, n_images - 1);
 
-        self.view = ViewState::Single(index);
+        self.view = ViewState::Single(index, right);
 
         // Images may have been panned between switches
         self.meta.panned();
         for index in self.visible_indices() {
             self.images[index as usize].instruments.panned();
+        }
+    }
+
+    /// Set an image index to be shown (as the left image)
+    fn set_image(&mut self, index: u8) {
+        assert!((index as usize) < self.images.len(), "at most 255 images");
+        self.view = match self.view {
+            ViewState::Nothing => ViewState::Nothing,
+            ViewState::Single(_, right) => ViewState::Single(index, right),
+            ViewState::Split(split) => ViewState::Split(Split {
+                left: index,
+                ..split
+            }),
+        };
+
+        self.meta.replaced_image();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.zoomed();
+        }
+    }
+
+    /// Make the currently shown (left) image also the right image
+    fn set_right_image(&mut self) {
+        self.view = match self.view {
+            ViewState::Nothing => ViewState::Nothing,
+            ViewState::Single(left, _) => ViewState::Single(left, Some(left)),
+            ViewState::Split(split) => ViewState::Split(Split {
+                left: split.left,
+                right: split.left,
+                ..split
+            }),
+        };
+
+        self.meta.replaced_image();
+        for index in self.visible_indices() {
+            self.images[index as usize].instruments.zoomed();
         }
     }
 }
@@ -628,8 +702,8 @@ enum ViewState {
     /// No image is displayed
     #[default]
     Nothing,
-    /// Show one image at a time; the payload is the index of the shown image
-    Single(u8),
+    /// Show one image at a time, and remember the last right image
+    Single(u8, Option<u8>),
     /// Show both images side by side, split by the split bar
     Split(Split),
 }
@@ -639,7 +713,7 @@ impl ViewState {
     const fn as_mode(self) -> ViewMode {
         match self {
             Self::Nothing => ViewMode::Single,
-            Self::Single(_) => ViewMode::Single,
+            Self::Single(..) => ViewMode::Single,
             Self::Split(_) => ViewMode::Split,
         }
     }
@@ -693,6 +767,10 @@ pub enum ImageMessage {
         /// Direction of the cycle
         direction: CycleDirection,
     },
+    /// Select an image for display by index
+    SetImage(u8),
+    /// Make the current displayed image the right one in the split
+    SetRightImage,
 }
 
 impl ImageMessage {
@@ -739,8 +817,10 @@ impl ImageMessage {
 /// Image data in memory
 #[derive(Clone)]
 pub struct Image {
+    /// Name of the image
+    name: String,
     /// The image's pixel data
-    image: image::RgbaImage,
+    data: image::RgbaImage,
     /// The color format to be used during rendering
     format: wgpu::TextureFormat,
 }
@@ -756,26 +836,35 @@ impl Image {
 
     /// Load an image from disk into memory with a specified color format
     pub fn load_as(path: &Path, format: wgpu::TextureFormat) -> Result<Self, image::ImageError> {
+        let name = path
+            .file_stem()
+            .expect("image file has name")
+            .to_string_lossy()
+            .into_owned();
         let image = image::ImageReader::open(path)?
             .with_guessed_format()?
             .decode()?;
         let image = image.into();
-        Ok(Self { image, format })
+        Ok(Self {
+            name,
+            data: image,
+            format,
+        })
     }
 
     /// Get the size of this image
     pub fn size(&self) -> PhysicalSize<u32> {
         PhysicalSize {
-            width: self.image.width(),
-            height: self.image.height(),
+            width: self.data.width(),
+            height: self.data.height(),
         }
     }
 
     /// Get the extent of this image for use with wgpu
     pub fn extent(&self) -> wgpu::Extent3d {
         wgpu::Extent3d {
-            width: self.image.width(),
-            height: self.image.height(),
+            width: self.data.width(),
+            height: self.data.height(),
             depth_or_array_layers: 1,
         }
     }
@@ -783,8 +872,8 @@ impl Image {
     /// Upload the image to a gpu texture
     pub fn upload(&self, ctx: &GpuContext, label: Option<&str>) -> wgpu::Texture {
         let size = wgpu::Extent3d {
-            width: self.image.width(),
-            height: self.image.height(),
+            width: self.data.width(),
+            height: self.data.height(),
             depth_or_array_layers: 1,
         };
 
@@ -818,7 +907,7 @@ impl Image {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &self.image,
+            &self.data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(texel_bytes * size.width),
@@ -838,7 +927,7 @@ impl std::ops::Deref for Image {
     type Target = image::RgbaImage;
 
     fn deref(&self) -> &Self::Target {
-        &self.image
+        &self.data
     }
 }
 
